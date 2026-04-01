@@ -1,6 +1,6 @@
 # ComfyUI-ScriptFlow
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **License:** GPL-3.0
 
 A general-purpose calculation node that executes user-written Python code and returns multiple text and numeric outputs based on the inputs.
