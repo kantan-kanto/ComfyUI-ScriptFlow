@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 import datetime
 import math
@@ -195,10 +195,42 @@ class MultiOutputScript:
         )
 
 
+class Centi:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "int_1": ("INT", {"forceInput": True}),
+                "int_2": ("INT", {"forceInput": True}),
+                "int_3": ("INT", {"forceInput": True}),
+            },
+        }
+
+    RETURN_TYPES = ("FLOAT", "FLOAT", "FLOAT")
+    RETURN_NAMES = ("float_1", "float_2", "float_3")
+    FUNCTION = "run"
+    CATEGORY = "utils"
+
+    def run(
+        self,
+        int_1: int | None = None,
+        int_2: int | None = None,
+        int_3: int | None = None,
+    ):
+        return (
+            None if int_1 is None else float(int_1) / 100.0,
+            None if int_2 is None else float(int_2) / 100.0,
+            None if int_3 is None else float(int_3) / 100.0,
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     "MultiOutputScript": MultiOutputScript,
+    "centi": Centi,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MultiOutputScript": "MultiOutputScript",
+    "centi": "centi",
 }

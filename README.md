@@ -1,6 +1,6 @@
 # ComfyUI-ScriptFlow
 
-**Version:** 1.0.1
+**Version:** 1.1.0
 **License:** GPL-3.0
 
 A general-purpose calculation node that executes user-written Python code and returns multiple text and numeric outputs based on the inputs.
@@ -30,12 +30,12 @@ This custom node accepts numbers (int/float) and text (string) as inputs, runs c
 - Parse and transform LLM outputs into structured values for downstream nodes.
 Dynamically generate numeric parameters (e.g., seeds, thresholds, scaling values) using custom calculations.
 
-## Node
-**Name:** `MultiOutputScript`  
+## Nodes
+
+### `MultiOutputScript`
 **Category:** `utils`
 
-### UI Ports (Current)
-Inputs (connectable):
+Inputs (optional, connectable):
 - `in_text_1` (accepts any input; validated as `str` at runtime)
 - `in_text_2` (accepts any input; validated as `str` at runtime)
 - `in_text_3` (accepts any input; validated as `str` at runtime)
@@ -54,6 +54,7 @@ Outputs:
 
 Notes on numeric outputs:
 - Outputs are `INT`.
+- If you need `FLOAT` values from integer inputs, use the `centi` node.
 - If a value is a float, the fractional part is truncated on output.
 - If you prefer rounding or ceiling, handle it in the script (e.g., `round(...)`, `math.ceil(...)`).
 
@@ -72,6 +73,23 @@ Unassigned outputs default to `None`.
 w, h = iv1, iv2
 ov1, ov2 = (512, 384) if w >= h else (384, 512)
 ```
+
+### `centi`
+**Category:** `utils`
+
+Inputs (optional, connectable):
+- `int_1` (INT)
+- `int_2` (INT)
+- `int_3` (INT)
+
+Outputs:
+- `float_1` (FLOAT) = `int_1 / 100`
+- `float_2` (FLOAT) = `int_2 / 100`
+- `float_3` (FLOAT) = `int_3 / 100`
+
+Notes:
+- If `int_n` is not connected, the corresponding `float_n` output is `None`.
+- The node is intentionally minimal and connector-only.
 
 ---
 
@@ -139,5 +157,15 @@ You should have received a copy of the GNU General Public License along with thi
 ---
 
 ## Release Notes
+### 1.1.0
+- Added new `centi` node in the `utils` category.
+- Added three optional integer inputs: `int_1`, `int_2`, `int_3`.
+- Added three float outputs: `float_1`, `float_2`, `float_3`.
+- Each connected input is converted by `int_n / 100`; unconnected inputs return `None`.
+- Designed as a minimal, connector-only UI node.
+
+### 1.0.1
+- Improved documentation and project metadata.
+
 ### 1.0.0
 - Initial release
