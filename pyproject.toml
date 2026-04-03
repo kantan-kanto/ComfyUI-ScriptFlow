@@ -1,6 +1,6 @@
 [project]
 name = "ComfyUI-ScriptFlow"
-description = "Python script node for ComfyUI supporting math, calc, and logic with multi output. Handle conditional workflows, auto-select resolution, parse LLM outputs, and generate filenames — all in one flexible node."
+description = "Python script node for ComfyUI supporting math, calc, logic, and text editing with multi output. Handle conditional workflows, auto-select resolution, parse LLM outputs, and generate filenames — all in one flexible node."
 version = "1.1.0"
 license = {file = "LICENSE"} 
 # classifiers = [
@@ -34,4 +34,3 @@ DisplayName = "ComfyUI-ScriptFlow"
 # Icon = ""
 includes = [] 
 # "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
-

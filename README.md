@@ -158,11 +158,11 @@ You should have received a copy of the GNU General Public License along with thi
 
 ## Release Notes
 ### 1.1.0
-- Added new `centi` node in the `utils` category.
-- Added three optional integer inputs: `int_1`, `int_2`, `int_3`.
-- Added three float outputs: `float_1`, `float_2`, `float_3`.
+Added `centi` node (`utils`).
+- Minimal connector-only utility node.
+- Three optional integer inputs: `int_1`, `int_2`, `int_3`.
+- Three float outputs: `float_1`, `float_2`, `float_3`.
 - Each connected input is converted by `int_n / 100`; unconnected inputs return `None`.
-- Designed as a minimal, connector-only UI node.
 
 ### 1.0.1
 - Improved documentation and project metadata.
