@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
+import ast
 import datetime
 import math
 import random
+import sys
+import time
 from typing import Any, Dict
 
 
@@ -43,6 +46,34 @@ _ALLOWED_BUILTINS = {
     "tuple": tuple,
 }
 
+_DEFAULT_EXEC_TIMEOUT_SECONDS = 1.5
+
+_BLOCKED_AST_NODES = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.ClassDef,
+    ast.Try,
+    ast.With,
+    ast.AsyncWith,
+)
+
+_BLOCKED_CALL_NAMES = {
+    "__import__",
+    "eval",
+    "exec",
+    "compile",
+    "open",
+    "input",
+    "globals",
+    "locals",
+    "vars",
+    "getattr",
+    "setattr",
+    "delattr",
+}
+
 
 class AnyType(str):
     def __ne__(self, __value: object) -> bool:  # allow any connection type
@@ -59,6 +90,48 @@ def _build_globals() -> Dict[str, Any]:
         "datetime": datetime,
         "math": math,
     }
+
+
+def _validate_ast(code: str) -> None:
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as exc:
+        raise ValueError(f"Syntax error in code: {exc}") from exc
+
+    for node in ast.walk(tree):
+        if isinstance(node, _BLOCKED_AST_NODES):
+            raise ValueError(
+                f"Unsupported syntax in safe mode: {type(node).__name__}"
+            )
+
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _BLOCKED_CALL_NAMES:
+                raise ValueError(
+                    f"Blocked function call in safe mode: {node.func.id}"
+                )
+
+
+def _exec_with_timeout(
+    code: str,
+    globals_dict: Dict[str, Any],
+    locals_dict: Dict[str, Any],
+    timeout_seconds: float = _DEFAULT_EXEC_TIMEOUT_SECONDS,
+) -> None:
+    deadline = time.perf_counter() + max(0.1, timeout_seconds)
+
+    def _trace(frame, event, arg):
+        if event == "line" and time.perf_counter() > deadline:
+            raise TimeoutError(
+                f"Script execution exceeded timeout ({timeout_seconds:.2f}s)"
+            )
+        return _trace
+
+    previous_trace = sys.gettrace()
+    sys.settrace(_trace)
+    try:
+        exec(code, globals_dict, locals_dict)
+    finally:
+        sys.settrace(previous_trace)
 
 
 def _validate_outputs(locals_dict: Dict[str, Any]) -> None:
@@ -180,8 +253,10 @@ class MultiOutputScript:
             "ov3": None,
         }
 
+        _validate_ast(code)
+
         globals_dict = _build_globals()
-        exec(code, globals_dict, locals_dict)
+        _exec_with_timeout(code, globals_dict, locals_dict)
 
         _validate_outputs(locals_dict)
 

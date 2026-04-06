@@ -1,6 +1,6 @@
 # ComfyUI-ScriptFlow
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **License:** GPL-3.0
 
 A general-purpose calculation node that executes user-written Python code and returns multiple text and numeric outputs based on the inputs.
@@ -117,10 +117,14 @@ exec(code, globals_dict, locals_dict)
 - file access (`open`, etc.)
 - OS operations (`os`, `sys`)
 - re-running `eval`/`exec`
+- blocked syntax in safe mode: `Import`, `ImportFrom`, `Global`, `Nonlocal`, `ClassDef`, `Try`, `With`
+- blocked calls in safe mode: `__import__`, `eval`, `exec`, `compile`, `open`, `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`
 
 ### Execution Notes
 - Using `random` or `datetime` makes outputs non-deterministic.
 - Type mismatches raise an error and stop execution.
+- Safe mode validates AST before execution and stops scripts that exceed the timeout (`1.5s` by default).
+- Use only trusted scripts/workflows. Do not run untrusted code from unknown sources.
 
 ## Examples
 
@@ -157,6 +161,13 @@ You should have received a copy of the GNU General Public License along with thi
 ---
 
 ## Release Notes
+### 1.1.1
+- Added safe-mode AST validation before script execution.
+- Blocked unsafe syntax (`Import`, `ImportFrom`, `Global`, `Nonlocal`, `ClassDef`, `Try`, `With`, `AsyncWith`).
+- Blocked unsafe calls (`__import__`, `eval`, `exec`, `compile`, `open`, `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`).
+- Added execution timeout guard (`1.5s` default) to stop runaway scripts.
+- Updated security notes for trusted-workflow usage.
+
 ### 1.1.0
 Added `centi` node (`utils`).
 - Minimal connector-only utility node.
