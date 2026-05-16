@@ -122,6 +122,11 @@ exec(code, globals_dict, locals_dict)
 
 ### Execution Notes
 - Using `random` or `datetime` makes outputs non-deterministic.
+- `datetime.strftime(...)` may fail because it can internally import the `time` module, while `__import__` is blocked for safety. Format timestamps manually instead:
+  ```python
+  now = datetime.datetime.now()
+  ot1 = f'{now.year:04d}{now.month:02d}{now.day:02d}{now.hour:02d}{now.minute:02d}{now.second:02d}'
+  ```
 - Type mismatches raise an error and stop execution.
 - Safe mode validates AST before execution and stops scripts that exceed the timeout (`1.5s` by default).
 - Use only trusted scripts/workflows. Do not run untrusted code from unknown sources.
@@ -132,6 +137,184 @@ exec(code, globals_dict, locals_dict)
 ![Demo](images/MultiOutputScript.gif)
 
 Demonstrates running the sample workflow with a landscape image and a portrait image.
+
+## Application Recipes
+
+### Convert `LLM Dialogue Cycle` transcript text to `dialogue_segments_json`
+
+`ComfyUI-LLM-Session` returns the full result of `LLM Dialogue Cycle` as `transcript_text`.
+You can connect that text to `MultiOutputScript.in_text_1` and paste the script below into
+the `code` field to generate a speaker-tagged JSON text for downstream dialogue TTS nodes.
+
+Recommended workflow:
+
+```text
+LLM Dialogue Cycle
+  -> transcript_text
+  -> MultiOutputScript.in_text_1
+  -> MultiOutputScript.out_text_1
+  -> dialogue_segments_json input of a TTS node
+```
+
+Paste this code into `MultiOutputScript.code`:
+
+```python
+# Convert ComfyUI-LLM-Session "LLM Dialogue Cycle" transcript_text
+# into dialogue_segments_json for TTS.
+# Only text inside Japanese corner quotes 「...」 is used as spoken dialogue.
+#
+# Input:
+#   it1: transcript_text
+#
+# Output:
+#   ot1: JSON text with schema "kantan.dialogue.v1"
+#
+# Expected transcript lines:
+#   [2026-05-16T12:00:00] USER -> A: initial prompt
+#   [2026-05-16T12:00:01] A: 彼女は少し考えた。「こんにちは。」
+#   [2026-05-16T12:00:02] B: 彼は笑った。「やあ。」「調子はどう？」
+#
+# The parser also accepts the unicode arrow form:
+#   USER → A:
+
+def json_escape(value):
+    s = str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace('"', '\\"')
+    s = s.replace("\n", "\\n")
+    s = s.replace("\r", "\\r")
+    s = s.replace("\t", "\\t")
+    return s
+
+def extract_spoken_text(value):
+    source = str(value)
+    parts = []
+    position = 0
+
+    while position < len(source):
+        start = source.find("「", position)
+        if start < 0:
+            position = len(source)
+        else:
+            end = source.find("」", start + 1)
+            if end < 0:
+                position = len(source)
+            else:
+                spoken = source[start + 1:end].strip()
+                if spoken:
+                    parts.append(spoken)
+                position = end + 1
+
+    return "\n".join(parts)
+
+transcript = str(it1 or "")
+lines = transcript.splitlines()
+utterances = []
+current = None
+
+for raw_line in lines:
+    line = str(raw_line)
+    speaker = None
+    text = None
+    timestamp = ""
+
+    if line.startswith("[") and "] " in line:
+        close_index = line.find("] ")
+        timestamp = line[1:close_index]
+        rest = line[close_index + 2:]
+
+        if rest.startswith("A:"):
+            speaker = "A"
+            text = rest[2:].strip()
+        elif rest.startswith("B:"):
+            speaker = "B"
+            text = rest[2:].strip()
+        elif rest.startswith("USER -> A:"):
+            speaker = "USER"
+            text = rest[len("USER -> A:"):].strip()
+        elif rest.startswith("USER → A:"):
+            speaker = "USER"
+            text = rest[len("USER → A:"):].strip()
+
+    if speaker == "A" or speaker == "B":
+        if current is not None:
+            utterances.append(current)
+        current = {
+            "speaker": speaker,
+            "text": text,
+            "timestamp": timestamp,
+        }
+    else:
+        if current is not None:
+            if current["text"]:
+                current["text"] = current["text"] + "\n" + line
+            else:
+                current["text"] = line
+
+if current is not None:
+    utterances.append(current)
+
+items = []
+index = 1
+for u in utterances:
+    spoken_text = extract_spoken_text(u["text"])
+    if not spoken_text:
+        continue
+
+    item = (
+        '{"index":'
+        + str(index)
+        + ',"speaker":"'
+        + json_escape(u["speaker"])
+        + '","text":"'
+        + json_escape(spoken_text)
+        + '","timestamp":"'
+        + json_escape(u["timestamp"])
+        + '"}'
+    )
+    items.append(item)
+    index = index + 1
+
+ot1 = (
+    '{"schema":"kantan.dialogue.v1",'
+    + '"source":"ComfyUI-LLM-Session LLM Dialogue Cycle",'
+    + '"utterances":['
+    + ",".join(items)
+    + "]}"
+)
+```
+
+The resulting `out_text_1` is a JSON string like this:
+
+```json
+{
+  "schema": "kantan.dialogue.v1",
+    "source": "ComfyUI-LLM-Session LLM Dialogue Cycle",
+    "utterances": [
+      {
+        "index": 1,
+        "speaker": "A",
+        "text": "こんにちは。",
+        "timestamp": "2026-05-16T12:00:01"
+      },
+      {
+        "index": 2,
+        "speaker": "B",
+        "text": "やあ。\n調子はどう？",
+        "timestamp": "2026-05-16T12:00:02"
+      }
+  ]
+}
+```
+
+Notes:
+
+- `USER -> A` / `USER → A` is intentionally skipped so TTS reads only character dialogue.
+- Multiline model output is kept inside the previous `A` or `B` utterance.
+- Only text inside `「...」` is emitted to `utterances[].text`; narration and inner thoughts outside quotes are skipped.
+- If one utterance contains multiple quoted lines, they are joined with newlines.
+- Utterances without `「...」` are omitted from the TTS script.
+- `out_text_2`, `out_text_3`, and numeric outputs are unused by this recipe.
 
 ### Example Workflow
 
