@@ -1,9 +1,9 @@
 # ComfyUI-ScriptFlow
 
-**Version:** 1.1.1
+**Version:** 1.2.0
 **License:** GPL-3.0
 
-A general-purpose calculation node that executes user-written Python code and returns multiple text and numeric outputs based on the inputs.
+A general-purpose calculation node that evaluates a safe Python-like script subset and returns multiple text and numeric outputs based on the inputs.
 
 This custom node accepts numbers (int/float) and text (string) as inputs, runs calculations and logical operations internally, and returns multiple values through separate output ports. It consolidates workflows that previously required combining several basic nodes into a single node.
 
@@ -20,7 +20,7 @@ This custom node accepts numbers (int/float) and text (string) as inputs, runs c
 - Multiple inputs: freely combine numeric and text inputs.
 - Calculations and logic: supports arithmetic, comparison, and simple conditional branching.
 - Multiple outputs: pass results to downstream nodes via separate output ports.
-- Safer execution: restricted environment (no file/OS access).
+- Safer execution: AST interpreter with restricted syntax and no file/OS access.
 
 ## Use Cases
 - In Wan2.2 I2V workflows, automatically select a recommended resolution
@@ -94,41 +94,47 @@ Notes:
 ---
 
 ## Execution Environment
-The script is executed using:
-```python
-exec(code, globals_dict, locals_dict)
-```
+The script is parsed with Python AST and evaluated by ScriptFlow's safe interpreter. It supports common workflow logic such as assignment, arithmetic, branching, loops, user-defined helper functions, dictionaries, lists, strings, and selected methods.
 
-### Allowed builtins
+### Allowed functions
 - `len`, `min`, `max`, `sum`, `abs`, `round`
 - `int`, `float`, `str`, `bool`
 - `sorted`, `reversed`
-- `enumerate`, `range`, `zip`, `map`, `filter`
+- `enumerate`, `range`, `zip`
 - `any`, `all`, `pow`, `divmod`
 - `list`, `dict`, `tuple`
 
-### Allowed modules
-- `random`
-- `datetime`
-- `math`
+### Allowed namespaces
+- `random`: `random`, `randint`, `uniform`, `choice`
+- `datetime`: `datetime.now`, `date.today`, date/time fields such as `year`, `month`, `day`, `hour`, `minute`, `second`, plus `isoformat` and `strftime` (`strftime` requires v1.2.0 or later)
+- `math`: `ceil`, `floor`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `log`, `log10`, `exp`, `pow`, `fabs`, `isfinite`, `pi`, `e`, `tau`
+
+### Allowed methods
+- `str`: `replace`, `find`, `strip`, `split`, `splitlines`, `startswith`, `endswith`, `join`, `lower`, `upper`
+- `list`: `append`
 
 ### Not allowed
 - `import` statements
 - file access (`open`, etc.)
 - OS operations (`os`, `sys`)
-- re-running `eval`/`exec`
-- blocked syntax in safe mode: `Import`, `ImportFrom`, `Global`, `Nonlocal`, `ClassDef`, `Try`, `With`
-- blocked calls in safe mode: `__import__`, `eval`, `exec`, `compile`, `open`, `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`
+- dynamic Python execution
+- blocked syntax in safe mode: `Import`, `ImportFrom`, `Global`, `Nonlocal`, `ClassDef`, `Try`, `With`, `AsyncWith`, `Lambda`, `Delete`, `Yield`, `Await`
+- blocked calls in safe mode: dynamic execution, file/input access, runtime namespace inspection, and dynamic attribute mutation
 
 ### Execution Notes
 - Using `random` or `datetime` makes outputs non-deterministic.
-- `datetime.strftime(...)` may fail because it can internally import the `time` module, while `__import__` is blocked for safety. Format timestamps manually instead:
+- `datetime.strftime(...)` is supported in v1.2.0 or later for concise timestamp formatting:
+  ```python
+  now = datetime.datetime.now()
+  ot1 = now.strftime("%Y%m%d%H%M%S")
+  ```
+- For versions earlier than v1.2.0, format the same timestamp manually:
   ```python
   now = datetime.datetime.now()
   ot1 = f'{now.year:04d}{now.month:02d}{now.day:02d}{now.hour:02d}{now.minute:02d}{now.second:02d}'
   ```
 - Type mismatches raise an error and stop execution.
-- Safe mode validates AST before execution and stops scripts that exceed the timeout (`1.5s` by default).
+- Safe mode validates AST before evaluation and stops scripts that exceed the step or loop limit.
 - Use only trusted scripts/workflows. Do not run untrusted code from unknown sources.
 
 ## Examples
@@ -344,10 +350,16 @@ You should have received a copy of the GNU General Public License along with thi
 ---
 
 ## Release Notes
+### 1.2.0
+- Replaced direct Python execution with a safe AST interpreter for ComfyUI Registry compatibility.
+- Added Python-subset support for helper functions, loops, dictionaries, lists, string methods, f-strings, `random`, `datetime`, and `math`.
+- Replaced trace-based timeout handling with step and loop limits.
+- Kept existing `MultiOutputScript` inputs and outputs unchanged.
+
 ### 1.1.1
 - Added safe-mode AST validation before script execution.
 - Blocked unsafe syntax (`Import`, `ImportFrom`, `Global`, `Nonlocal`, `ClassDef`, `Try`, `With`, `AsyncWith`).
-- Blocked unsafe calls (`__import__`, `eval`, `exec`, `compile`, `open`, `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`).
+- Blocked unsafe dynamic execution, file/input access, namespace inspection, and dynamic attribute mutation calls.
 - Added execution timeout guard (`1.5s` default) to stop runaway scripts.
 - Updated security notes for trusted-workflow usage.
 
