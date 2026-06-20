@@ -1,6 +1,6 @@
 [project]
 name = "ComfyUI-ScriptFlow"
-description = "Python script node for ComfyUI supporting math, calc, logic, and text editing with multi output. Handle conditional workflows, auto-select resolution, parse LLM outputs, and generate filenames — all in one flexible node."
+description = "Safe Python-like script subset node for ComfyUI supporting math, calc, logic, and text editing with multiple output ports. Handle conditional routing, auto-select resolution, parse LLM outputs, and generate filenames — all in one flexible node."
 version = "1.2.0"
 license = {file = "LICENSE"} 
 # classifiers = [

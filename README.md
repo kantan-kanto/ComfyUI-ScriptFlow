@@ -144,9 +144,19 @@ The script is parsed with Python AST and evaluated by ScriptFlow's safe interpre
 
 Demonstrates running the sample workflow with a landscape image and a portrait image.
 
+### Example Workflow
+
+```
+examples/
+ ├─ example_workflow.json
+```
+
 ## Application Recipes
 
 ### Convert `LLM Dialogue Cycle` transcript text to `dialogue_segments_json`
+
+<details>
+<summary>Show ComfyUI-LLM-Session transcript conversion recipe</summary>
 
 `ComfyUI-LLM-Session` returns the full result of `LLM Dialogue Cycle` as `transcript_text`.
 You can connect that text to `MultiOutputScript.in_text_1` and paste the script below into
@@ -322,12 +332,7 @@ Notes:
 - Utterances without `「...」` are omitted from the TTS script.
 - `out_text_2`, `out_text_3`, and numeric outputs are unused by this recipe.
 
-### Example Workflow
-
-```
-examples/
- ├─ example_workflow.json
-```
+</details>
 
 ## License
 
