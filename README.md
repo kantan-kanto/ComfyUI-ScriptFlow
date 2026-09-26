@@ -80,10 +80,15 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that asks [Jev](https://typesafe.ai) (TypeSafe AI's decision model) typed questions about text.
 
 Setup:
-```bash
-pip install typesafe-sdk
-export TYPESAFE_API_KEY="your-api-key"
-```
+1. Install the SDK in the Python environment that runs ComfyUI:
+   ```bash
+   pip install typesafe-sdk
+   ```
+2. Create `api_key.txt` in the actual installation directory of this custom node and add your TypeSafe API key (single line, no quotes):
+   ```
+   ComfyUI/custom_nodes/<your-installation-folder>/api_key.txt
+   ```
+   The key is read from this file on every run; the `TYPESAFE_API_KEY` environment variable is not used. `api_key.txt` is listed in `.gitignore`; never commit it.
 
 Extra input:
 - `max_jev_calls` (INT, default 8): maximum Jev API requests per run. Identical questions within a run are asked only once.

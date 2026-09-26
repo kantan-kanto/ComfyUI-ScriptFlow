@@ -32,6 +32,9 @@ env/
 *.swo
 *~
 
+# API Keys
+api_key.txt
+
 # Model files (too large for git)
 *.gguf
 *.safetensors

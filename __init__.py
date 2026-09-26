@@ -14,6 +14,7 @@ import ast
 import datetime
 import math
 import random
+from pathlib import Path
 from typing import Any, Dict
 
 from .jev_backend import JevBackend, TypeSafeClient
@@ -22,6 +23,7 @@ from .jev_backend import JevBackend, TypeSafeClient
 _DEFAULT_MAX_STEPS = 10000
 _DEFAULT_MAX_CALL_DEPTH = 32
 _MAX_RANGE_SIZE = 10000
+_API_KEY_PATH = Path(__file__).resolve().parent / "api_key.txt"
 
 _BLOCKED_AST_NODES = (
     ast.Import,
@@ -889,7 +891,16 @@ class MultiOutputScriptJev(MultiOutputScript):
     ):
         if TypeSafeClient is None:
             raise RuntimeError("typesafe-sdk is not installed. Run: pip install typesafe-sdk")
-        with TypeSafeClient() as client:
+        if not _API_KEY_PATH.exists():
+            raise EnvironmentError(
+                f"API key file not found: {_API_KEY_PATH}\nPlease create this file with your TypeSafe API key."
+            )
+        api_key = _API_KEY_PATH.read_text(encoding="utf-8").strip()
+        if not api_key:
+            raise EnvironmentError(
+                f'API key is not set in "{_API_KEY_PATH}"\nPlease add your TypeSafe API key to this file.'
+            )
+        with TypeSafeClient(api_key=api_key) as client:
             return _run_script(
                 code,
                 JevBackend(client, max_jev_calls),
