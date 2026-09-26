@@ -92,6 +92,7 @@ Functions (`state` is a string, dict, or list; text only):
 - `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
 - `jev.noul(state, question)` → yes-probability (`0.0`–`1.0`). Compare it with a threshold; using it directly as a condition raises an error.
 - `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of 2–16 labels, or a dict of labels to descriptions.
+- `jev.probabilities(state, question, options)` → `dict` of each option to its probability (sums to `1.0`). Same `options` as `jev.choice`; asking both with the same arguments runs the model once.
 - `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`) for 2–16 ordered level descriptions
 
 ```python
@@ -103,7 +104,12 @@ else:
 
 kind = jev.choice(it1, "Which orientation suits this prompt?", ["portrait", "landscape"])
 ov2, ov3 = (384, 512) if kind == "portrait" else (512, 384)
+
+probs = jev.probabilities(it1, "Which orientation suits this prompt?", ["portrait", "landscape"])
+ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape']:.3f})"
 ```
+
+The node's default script picks one of eight aspect ratios for the prompt in `it1`, outputs its width and height to `out_value_1` / `out_value_2`, and lists every ratio's probability in `out_text_1`.
 
 Notes:
 - Each question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU); the first question also loads the model.

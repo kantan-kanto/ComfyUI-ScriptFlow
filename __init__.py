@@ -517,6 +517,10 @@ class _SafeScriptInterpreter:
             if len(args) != 3:
                 raise ValueError("jev.choice() expects 3 arguments")
             return self.jev.choice(*args)
+        if name == "probabilities":
+            if len(args) != 3:
+                raise ValueError("jev.probabilities() expects 3 arguments")
+            return self.jev.probabilities(*args)
         if name == "score":
             if len(args) != 3:
                 raise ValueError("jev.score() expects 3 arguments")
@@ -868,11 +872,28 @@ class MultiOutputScriptJev(MultiOutputScript):
             "# Jev: jev.yes(state, question[, threshold]) -> bool\n"
             "#      jev.noul(state, question) -> probability\n"
             "#      jev.choice(state, question, options) -> str\n"
+            "#      jev.probabilities(state, question, options) -> {option: probability}\n"
             "#      jev.score(state, question, levels) -> float\n"
-            "# Example:\n"
-            "kind = jev.choice(it1, \"What orientation suits this prompt?\", [\"portrait\", \"landscape\"])\n"
-            "ov1, ov2 = (384, 512) if kind == \"portrait\" else (512, 384)\n"
-            "ot1 = kind\n"
+            "# Example: pick an aspect ratio for the prompt in it1\n"
+            "sizes = {\n"
+            "    \"1:1 (Square)\": (1024, 1024),\n"
+            "    \"2:3 (Portrait Photo)\": (832, 1216),\n"
+            "    \"3:2 (Photo)\": (1216, 832),\n"
+            "    \"3:4 (Portrait Standard)\": (896, 1152),\n"
+            "    \"4:3 (Standard)\": (1152, 896),\n"
+            "    \"9:16 (Portrait Widescreen)\": (768, 1344),\n"
+            "    \"16:9 (Widescreen)\": (1344, 768),\n"
+            "    \"21:9 (Ultrawide)\": (1536, 640),\n"
+            "}\n"
+            "question = \"Which image aspect ratio best suits this prompt?\"\n"
+            "ratios = list(sizes)\n"
+            "best = jev.choice(it1, question, ratios)\n"
+            "probs = jev.probabilities(it1, question, ratios)\n"
+            "ov1, ov2 = sizes[best]\n"
+            "lines = [best]\n"
+            "for ratio in ratios:\n"
+            "    lines.append(f\"{ratio}: {probs[ratio]:.3f}\")\n"
+            "ot1 = \"\\n\".join(lines)\n"
         )
         types["required"]["model"] = (list(list_local_models()),)
         types["required"]["max_jev_calls"] = ("INT", {"default": 8, "min": 1, "max": 64})

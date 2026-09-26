@@ -49,12 +49,14 @@ class JevBackend:
         return self._ask(state, question, ["Yes", "No"])[0]
 
     def choice(self, state: Any, question: Any, options: list | dict) -> str:
+        probabilities = self.probabilities(state, question, options)
+        return max(probabilities, key=probabilities.get)
+
+    def probabilities(self, state: Any, question: Any, options: list | dict) -> dict[str, float]:
         if isinstance(options, list):
             options = {str(option): None for option in options}
-        labels = list(options)
         descriptions = [label if description is None else f"{label}: {description}" for label, description in options.items()]
-        probabilities = self._ask(state, question, descriptions)
-        return labels[probabilities.index(max(probabilities))]
+        return dict(zip(options, self._ask(state, question, descriptions)))
 
     def score(self, state: Any, question: Any, levels: list) -> float:
         probabilities = self._ask(state, question, list(levels))
