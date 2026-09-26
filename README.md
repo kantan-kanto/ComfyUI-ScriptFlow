@@ -109,7 +109,7 @@ probs = jev.probabilities(it1, "Which orientation suits this prompt?", ["portrai
 ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape']:.3f})"
 ```
 
-The node's default script picks one of eight aspect ratios for the prompt in `it1`, outputs its width and height to `out_value_1` / `out_value_2`, and lists every ratio's probability in `out_text_1`.
+The node's default script picks one of eight aspect ratios for the prompt in `it1`, sizes it to the megapixels in `in_value_1` (default `1.0` when unconnected; width and height rounded to multiples of 64), outputs the width and height to `out_value_1` / `out_value_2`, and lists every ratio's probability in `out_text_1`.
 
 Notes:
 - Each question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU); the first question also loads the model.
