@@ -872,6 +872,7 @@ class MultiOutputScriptJev(MultiOutputScript):
             "# Example:\n"
             "kind = jev.choice(it1, \"What orientation suits this prompt?\", [\"portrait\", \"landscape\"])\n"
             "ov1, ov2 = (384, 512) if kind == \"portrait\" else (512, 384)\n"
+            "ot1 = kind\n"
         )
         types["required"]["model"] = (list(list_local_models()),)
         types["required"]["max_jev_calls"] = ("INT", {"default": 8, "min": 1, "max": 64})
