@@ -14,16 +14,14 @@ import ast
 import datetime
 import math
 import random
-from pathlib import Path
 from typing import Any, Dict
 
-from .jev_backend import JevBackend, TypeSafeClient
+from .jev_backend import JevBackend, list_local_models, unload_local_model
 
 
 _DEFAULT_MAX_STEPS = 10000
 _DEFAULT_MAX_CALL_DEPTH = 32
 _MAX_RANGE_SIZE = 10000
-_API_KEY_PATH = Path(__file__).resolve().parent / "api_key.txt"
 
 _BLOCKED_AST_NODES = (
     ast.Import,
@@ -875,13 +873,17 @@ class MultiOutputScriptJev(MultiOutputScript):
             "kind = jev.choice(it1, \"What orientation suits this prompt?\", [\"portrait\", \"landscape\"])\n"
             "ov1, ov2 = (384, 512) if kind == \"portrait\" else (512, 384)\n"
         )
+        types["required"]["model"] = (list(list_local_models()),)
         types["required"]["max_jev_calls"] = ("INT", {"default": 8, "min": 1, "max": 64})
+        types["required"]["keep_model_loaded"] = ("BOOLEAN", {"default": True})
         return types
 
     def run(
         self,
         code: str,
+        model: str,
         max_jev_calls: int,
+        keep_model_loaded: bool,
         in_text_1: Any = None,
         in_text_2: Any = None,
         in_text_3: Any = None,
@@ -889,21 +891,13 @@ class MultiOutputScriptJev(MultiOutputScript):
         in_value_2: Any = None,
         in_value_3: Any = None,
     ):
-        if TypeSafeClient is None:
-            raise RuntimeError("typesafe-sdk is not installed. Run: pip install typesafe-sdk")
-        if not _API_KEY_PATH.exists():
-            raise EnvironmentError(
-                f"API key file not found: {_API_KEY_PATH}\nPlease create this file with your TypeSafe API key."
-            )
-        api_key = _API_KEY_PATH.read_text(encoding="utf-8").strip()
-        if not api_key:
-            raise EnvironmentError(
-                f'API key is not set in "{_API_KEY_PATH}"\nPlease add your TypeSafe API key to this file.'
-            )
-        with TypeSafeClient(api_key=api_key) as client:
+        model_path = list_local_models().get(model)
+        if model_path is None:
+            raise ValueError(f"GGUF model not found under models/LLM or models/text_encoders: {model}")
+        try:
             return _run_script(
                 code,
-                JevBackend(client, max_jev_calls),
+                JevBackend(model_path, max_jev_calls),
                 in_text_1,
                 in_text_2,
                 in_text_3,
@@ -911,6 +905,9 @@ class MultiOutputScriptJev(MultiOutputScript):
                 in_value_2,
                 in_value_3,
             )
+        finally:
+            if not keep_model_loaded:
+                unload_local_model()
 
 
 def _run_script(

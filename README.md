@@ -77,27 +77,22 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 ### `MultiOutputScript (Jev)`
 **Category:** `utils`
 
-Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that asks [Jev](https://typesafe.ai) (TypeSafe AI's decision model) typed questions about text.
+Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that answers typed questions about text with a local GGUF language model. It works like [Jev](https://typesafe.ai) (TypeSafe AI's decision model) but runs on your machine: the decision is read from the model's next-token probabilities for lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network.
 
 Setup:
-1. Install the SDK in the Python environment that runs ComfyUI:
-   ```bash
-   pip install typesafe-sdk
-   ```
-2. Create `api_key.txt` in the actual installation directory of this custom node and add your TypeSafe API key (single line, no quotes):
-   ```
-   ComfyUI/custom_nodes/<your-installation-folder>/api_key.txt
-   ```
-   The key is read from this file on every run; the `TYPESAFE_API_KEY` environment variable is not used. `api_key.txt` is listed in `.gitignore`; never commit it.
+- Install [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) with GPU support for your platform in the Python environment that runs ComfyUI.
+- Put an instruction-tuned GGUF model with a chat template in `ComfyUI/models/LLM` (or `models/text_encoders`). Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
 
-Extra input:
-- `max_jev_calls` (INT, default 8): maximum Jev API requests per run. Identical questions within a run are asked only once.
+Extra inputs:
+- `model`: GGUF model to use (`mmproj-*` files are hidden).
+- `max_jev_calls` (INT, default 8): maximum model evaluations per run. Identical questions within a run are evaluated only once.
+- `keep_model_loaded` (BOOLEAN, default true): keep the model in memory between runs. Turn it off to free VRAM after each run.
 
-Functions (`state` is a string, dict, or list; Jev accepts text only):
+Functions (`state` is a string, dict, or list; text only):
 - `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
 - `jev.noul(state, question)` → yes-probability (`0.0`–`1.0`). Compare it with a threshold; using it directly as a condition raises an error.
-- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of labels, or a dict of labels to descriptions.
-- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`)
+- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of 2–16 labels, or a dict of labels to descriptions.
+- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`) for 2–16 ordered level descriptions
 
 ```python
 # it1: a prompt text
@@ -111,9 +106,9 @@ ov2, ov3 = (384, 512) if kind == "portrait" else (512, 384)
 ```
 
 Notes:
-- This node sends `state` and questions to the TypeSafe API over the internet. Do not use it with text you cannot share externally.
-- Results are probabilistic; test thresholds on your own inputs.
-- `MultiOutputScript` itself never makes network requests; `jev` is not available there.
+- Each question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU); the first question also loads the model.
+- Probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
+- `MultiOutputScript` itself never loads a model; `jev` is not available there.
 
 ### `centi`
 **Category:** `utils`
