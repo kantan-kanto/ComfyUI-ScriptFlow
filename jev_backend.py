@@ -126,8 +126,17 @@ def list_local_models() -> dict[str, str]:
             for file_name in files:
                 if file_name.endswith(".gguf") and not file_name.startswith("mmproj"):
                     path = os.path.join(current_dir, file_name)
-                    models[os.path.relpath(path, folder_paths.models_dir).replace("\\", "/")] = path
+                    models[_display_name(path)] = path
     return dict(sorted(models.items(), key=lambda item: item[0].lower()))
+
+
+def _display_name(path: str) -> str:
+    # models registered through extra_model_paths.yaml may be outside models_dir or on another drive
+    try:
+        rel = os.path.relpath(path, folder_paths.models_dir)
+    except ValueError:
+        return path
+    return path if rel.startswith("..") else rel.replace("\\", "/")
 
 
 def load_local_model(model_path: str) -> tuple[Any, Any]:
