@@ -74,6 +74,42 @@ w, h = iv1, iv2
 ov1, ov2 = (512, 384) if w >= h else (384, 512)
 ```
 
+### `MultiOutputScript (Jev)`
+**Category:** `utils`
+
+Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that asks [Jev](https://typesafe.ai) (TypeSafe AI's decision model) typed questions about text.
+
+Setup:
+```bash
+pip install typesafe-sdk
+export TYPESAFE_API_KEY="your-api-key"
+```
+
+Extra input:
+- `max_jev_calls` (INT, default 8): maximum Jev API requests per run. Identical questions within a run are asked only once.
+
+Functions (`state` is a string, dict, or list; Jev accepts text only):
+- `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
+- `jev.noul(state, question)` → yes-probability (`0.0`–`1.0`). Compare it with a threshold; using it directly as a condition raises an error.
+- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of labels, or a dict of labels to descriptions.
+- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`)
+
+```python
+# it1: a prompt text
+if jev.yes(it1, "Does this prompt describe a night scene?", 0.7):
+    ov1 = 30
+else:
+    ov1 = 20
+
+kind = jev.choice(it1, "Which orientation suits this prompt?", ["portrait", "landscape"])
+ov2, ov3 = (384, 512) if kind == "portrait" else (512, 384)
+```
+
+Notes:
+- This node sends `state` and questions to the TypeSafe API over the internet. Do not use it with text you cannot share externally.
+- Results are probabilistic; test thresholds on your own inputs.
+- `MultiOutputScript` itself never makes network requests; `jev` is not available there.
+
 ### `centi`
 **Category:** `utils`
 

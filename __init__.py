@@ -16,6 +16,8 @@ import math
 import random
 from typing import Any, Dict
 
+from .jev_backend import JevBackend, TypeSafeClient
+
 
 _DEFAULT_MAX_STEPS = 10000
 _DEFAULT_MAX_CALL_DEPTH = 32
@@ -148,6 +150,10 @@ class _SafeNamespace:
         self.name = name
 
 
+class _JevProbability(float):
+    pass
+
+
 class _SafeFunction:
     def __init__(self, name: str, args: ast.arguments, body: list[ast.stmt]):
         self.name = name
@@ -182,8 +188,10 @@ class _SafeScriptInterpreter:
         variables: Dict[str, Any],
         max_steps: int = _DEFAULT_MAX_STEPS,
         max_call_depth: int = _DEFAULT_MAX_CALL_DEPTH,
+        jev: JevBackend | None = None,
     ):
         self.frames = [variables]
+        self.jev = jev
         self.max_steps = max_steps
         self.max_call_depth = max_call_depth
         self.steps = 0
@@ -491,7 +499,29 @@ class _SafeScriptInterpreter:
             return datetime.date.today()
         if namespace == "math" and name in _SAFE_MATH_FUNCTIONS:
             return self._call_math(name, args)
+        if namespace == "jev":
+            return self._call_jev(name, args)
         raise ValueError(f"Unsupported namespace call: {namespace}.{name}")
+
+    def _call_jev(self, name: str, args: list[Any]) -> Any:
+        if name == "yes":
+            if len(args) not in (2, 3):
+                raise ValueError("jev.yes() expects 2 or 3 arguments")
+            threshold = args[2] if len(args) == 3 else 0.5
+            return self.jev.noul(args[0], args[1]) >= threshold
+        if name == "noul":
+            if len(args) != 2:
+                raise ValueError("jev.noul() expects 2 arguments")
+            return _JevProbability(self.jev.noul(*args))
+        if name == "choice":
+            if len(args) != 3:
+                raise ValueError("jev.choice() expects 3 arguments")
+            return self.jev.choice(*args)
+        if name == "score":
+            if len(args) != 3:
+                raise ValueError("jev.score() expects 3 arguments")
+            return self.jev.score(*args)
+        raise ValueError(f"Unsupported namespace call: jev.{name}")
 
     def _call_math(self, name: str, args: list[Any]) -> Any:
         if name == "ceil":
@@ -680,6 +710,8 @@ class _SafeScriptInterpreter:
                 return frame[name]
         if name in ("random", "datetime", "math"):
             return _SafeNamespace(name)
+        if name == "jev" and self.jev is not None:
+            return _SafeNamespace(name)
         return None
 
     def _get_name(self, name: str) -> Any:
@@ -695,6 +727,8 @@ class _SafeScriptInterpreter:
 
     @staticmethod
     def _truthy(value: Any) -> bool:
+        if isinstance(value, _JevProbability):
+            raise ValueError("Compare jev.noul() with a threshold, or use jev.yes()")
         return bool(value)
 
 
@@ -821,40 +855,97 @@ class MultiOutputScript:
         in_value_2: Any = None,
         in_value_3: Any = None,
     ):
-        it1 = _select_text_value("", in_text_1, "in_text_1")
-        it2 = _select_text_value("", in_text_2, "in_text_2")
-        it3 = _select_text_value("", in_text_3, "in_text_3")
-        iv1 = _select_numeric_value(0.0, in_value_1, "in_value_1")
-        iv2 = _select_numeric_value(0.0, in_value_2, "in_value_2")
-        iv3 = _select_numeric_value(0.0, in_value_3, "in_value_3")
-
-        locals_dict: Dict[str, Any] = {
-            "it1": it1,
-            "it2": it2,
-            "it3": it3,
-            "iv1": iv1,
-            "iv2": iv2,
-            "iv3": iv3,
-            "ot1": None,
-            "ot2": None,
-            "ot3": None,
-            "ov1": None,
-            "ov2": None,
-            "ov3": None,
-        }
-
-        locals_dict = _SafeScriptInterpreter(locals_dict).run(code)
-
-        _validate_outputs(locals_dict)
-
-        return (
-            locals_dict.get("ot1"),
-            locals_dict.get("ot2"),
-            locals_dict.get("ot3"),
-            None if locals_dict.get("ov1") is None else int(locals_dict.get("ov1")),
-            None if locals_dict.get("ov2") is None else int(locals_dict.get("ov2")),
-            None if locals_dict.get("ov3") is None else int(locals_dict.get("ov3")),
+        return _run_script(
+            code, None, in_text_1, in_text_2, in_text_3, in_value_1, in_value_2, in_value_3
         )
+
+
+class MultiOutputScriptJev(MultiOutputScript):
+    @classmethod
+    def INPUT_TYPES(cls):
+        types = super().INPUT_TYPES()
+        types["required"]["code"][1]["default"] = (
+            "# Jev: jev.yes(state, question[, threshold]) -> bool\n"
+            "#      jev.noul(state, question) -> probability\n"
+            "#      jev.choice(state, question, options) -> str\n"
+            "#      jev.score(state, question, levels) -> float\n"
+            "# Example:\n"
+            "kind = jev.choice(it1, \"What orientation suits this prompt?\", [\"portrait\", \"landscape\"])\n"
+            "ov1, ov2 = (384, 512) if kind == \"portrait\" else (512, 384)\n"
+        )
+        types["required"]["max_jev_calls"] = ("INT", {"default": 8, "min": 1, "max": 64})
+        return types
+
+    def run(
+        self,
+        code: str,
+        max_jev_calls: int,
+        in_text_1: Any = None,
+        in_text_2: Any = None,
+        in_text_3: Any = None,
+        in_value_1: Any = None,
+        in_value_2: Any = None,
+        in_value_3: Any = None,
+    ):
+        if TypeSafeClient is None:
+            raise RuntimeError("typesafe-sdk is not installed. Run: pip install typesafe-sdk")
+        with TypeSafeClient() as client:
+            return _run_script(
+                code,
+                JevBackend(client, max_jev_calls),
+                in_text_1,
+                in_text_2,
+                in_text_3,
+                in_value_1,
+                in_value_2,
+                in_value_3,
+            )
+
+
+def _run_script(
+    code: str,
+    jev: JevBackend | None,
+    in_text_1: Any,
+    in_text_2: Any,
+    in_text_3: Any,
+    in_value_1: Any,
+    in_value_2: Any,
+    in_value_3: Any,
+):
+    it1 = _select_text_value("", in_text_1, "in_text_1")
+    it2 = _select_text_value("", in_text_2, "in_text_2")
+    it3 = _select_text_value("", in_text_3, "in_text_3")
+    iv1 = _select_numeric_value(0.0, in_value_1, "in_value_1")
+    iv2 = _select_numeric_value(0.0, in_value_2, "in_value_2")
+    iv3 = _select_numeric_value(0.0, in_value_3, "in_value_3")
+
+    locals_dict: Dict[str, Any] = {
+        "it1": it1,
+        "it2": it2,
+        "it3": it3,
+        "iv1": iv1,
+        "iv2": iv2,
+        "iv3": iv3,
+        "ot1": None,
+        "ot2": None,
+        "ot3": None,
+        "ov1": None,
+        "ov2": None,
+        "ov3": None,
+    }
+
+    locals_dict = _SafeScriptInterpreter(locals_dict, jev=jev).run(code)
+
+    _validate_outputs(locals_dict)
+
+    return (
+        locals_dict.get("ot1"),
+        locals_dict.get("ot2"),
+        locals_dict.get("ot3"),
+        None if locals_dict.get("ov1") is None else int(locals_dict.get("ov1")),
+        None if locals_dict.get("ov2") is None else int(locals_dict.get("ov2")),
+        None if locals_dict.get("ov3") is None else int(locals_dict.get("ov3")),
+    )
 
 
 class Centi:
@@ -889,10 +980,12 @@ class Centi:
 
 NODE_CLASS_MAPPINGS = {
     "MultiOutputScript": MultiOutputScript,
+    "MultiOutputScriptJev": MultiOutputScriptJev,
     "centi": Centi,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MultiOutputScript": "MultiOutputScript",
+    "MultiOutputScriptJev": "MultiOutputScript (Jev)",
     "centi": "centi",
 }
