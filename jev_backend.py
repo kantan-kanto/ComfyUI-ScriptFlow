@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 from typing import Any
@@ -208,8 +209,13 @@ def load_local_model(model_path: str) -> tuple[Any, Any]:
 
 
 def unload_local_model() -> None:
+    # Same cleanup as ComfyUI-LLM-Session's Unload LLM Model: drop the model, collect, then empty the device cache
     global _loaded_model
     if _loaded_model is None:
         return
-    _loaded_model[1].close()
+    llm = _loaded_model[1]
     _loaded_model = None
+    llm.close()
+    del llm
+    gc.collect()
+    comfy.model_management.soft_empty_cache()

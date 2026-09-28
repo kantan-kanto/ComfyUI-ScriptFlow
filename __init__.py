@@ -8,8 +8,6 @@
 
 from __future__ import annotations
 
-__version__ = "1.2.0"
-
 import ast
 import datetime
 import math
@@ -911,7 +909,6 @@ class MultiOutputScriptJev(MultiOutputScript):
         )
         types["required"]["model"] = ([_TYPESAFE_API] + list(list_local_models()),)
         types["required"]["max_jev_calls"] = ("INT", {"default": 8, "min": 1, "max": 64})
-        types["required"]["keep_model_loaded"] = ("BOOLEAN", {"default": True})
         return types
 
     def run(
@@ -919,7 +916,6 @@ class MultiOutputScriptJev(MultiOutputScript):
         code: str,
         model: str,
         max_jev_calls: int,
-        keep_model_loaded: bool,
         in_text_1: Any = None,
         in_text_2: Any = None,
         in_text_3: Any = None,
@@ -937,8 +933,7 @@ class MultiOutputScriptJev(MultiOutputScript):
         try:
             return _run_script(code, JevBackend(LocalJev(model_path), max_jev_calls), *inputs)
         finally:
-            if not keep_model_loaded:
-                unload_local_model()
+            unload_local_model()
 
 
 def _typesafe_client() -> Any:
