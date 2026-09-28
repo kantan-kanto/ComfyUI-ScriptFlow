@@ -25,6 +25,11 @@ try:
 except ImportError:
     Llama = None
 
+try:
+    from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+except ImportError:
+    TypeSafeClient = None
+
 
 _LETTERS = "ABCDEFGHIJKLMNOP"
 _DIRECT_SYSTEM = (
@@ -39,14 +44,14 @@ _loaded_model: tuple[str, Any, Any] | None = None
 class JevBackend:
     """Caches answers and limits model calls for a single script run."""
 
-    def __init__(self, model_path: str, max_calls: int):
-        self.model_path = model_path
+    def __init__(self, engine: Any, max_calls: int):
+        self.engine = engine
         self.max_calls = max_calls
         self.calls = 0
         self.cache: dict[str, Any] = {}
 
     def noul(self, state: Any, question: Any) -> float:
-        return self._ask(state, question, ["Yes", "No"])[0]
+        return self._ask(state, "noul", question, None)[0]
 
     def choice(self, state: Any, question: Any, options: list | dict) -> str:
         probabilities = self.probabilities(state, question, options)
@@ -55,23 +60,58 @@ class JevBackend:
     def probabilities(self, state: Any, question: Any, options: list | dict) -> dict[str, float]:
         if isinstance(options, list):
             options = {str(option): None for option in options}
-        descriptions = [label if description is None else f"{label}: {description}" for label, description in options.items()]
-        return dict(zip(options, self._ask(state, question, descriptions)))
+        return dict(zip(options, self._ask(state, "choice", question, options)))
 
     def score(self, state: Any, question: Any, levels: list) -> float:
-        probabilities = self._ask(state, question, list(levels))
+        probabilities = self._ask(state, "score", question, list(levels))
         return sum(level * p for level, p in enumerate(probabilities))
 
-    def _ask(self, state: Any, question: Any, options: list) -> list[float]:
-        key = json.dumps([state, question, options], sort_keys=True, ensure_ascii=False)
+    def _ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
+        key = json.dumps([state, kind, question, criteria], sort_keys=True, ensure_ascii=False)
         if key in self.cache:
             return self.cache[key]
         if self.calls >= self.max_calls:
             raise RuntimeError(f"Script exceeded max_jev_calls ({self.max_calls})")
         self.calls += 1
-        probabilities = _option_probabilities(self.model_path, state, question, options)
+        probabilities = self.engine.ask(state, kind, question, criteria)
         self.cache[key] = probabilities
         return probabilities
+
+
+class LocalJev:
+    """Answers with a local GGUF model. Noul is asked as Yes/No options."""
+
+    def __init__(self, model_path: str):
+        self.model_path = model_path
+
+    def ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
+        if kind == "noul":
+            options = ["Yes", "No"]
+        elif kind == "choice":
+            options = [label if description is None else f"{label}: {description}" for label, description in criteria.items()]
+        else:
+            options = criteria
+        return _option_probabilities(self.model_path, state, question, options)
+
+
+class TypeSafeJev:
+    """Answers with TypeSafe's Jev API. Returns probabilities in the order of the options."""
+
+    def __init__(self, client: Any):
+        self.client = client
+
+    def ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
+        if kind == "noul":
+            p = self._answer(state, Noul(instructions=question)).noul
+            return [p, 1.0 - p]
+        if kind == "choice":
+            probabilities = self._answer(state, Choice(instructions=question, criteria=criteria)).probabilities
+            return [probabilities[label] for label in criteria]
+        probabilities = self._answer(state, Score(instructions=question, criteria=criteria)).probabilities
+        return [probabilities[level] for level in range(len(criteria))]
+
+    def _answer(self, state: Any, question: Any) -> Any:
+        return self.client.system_one(state=state, questions={"q": question}).answers["q"]
 
 
 def _option_probabilities(model_path: str, state: Any, question: Any, options: list) -> list[float]:

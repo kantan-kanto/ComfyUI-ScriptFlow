@@ -77,23 +77,37 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 ### `MultiOutputScript (Jev)`
 **Category:** `utils`
 
-Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that answers typed questions about text with a local GGUF language model. It works like [Jev](https://typesafe.ai) (TypeSafe AI's decision model) but runs on your machine: the decision is read from the model's next-token probabilities for lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network.
+Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that answers typed questions about text. Scripts are the same for both backends:
 
-Setup:
+- **TypeSafe API**: asks [Jev](https://typesafe.ai), TypeSafe AI's decision model, over the internet.
+- **Local GGUF model**: runs on your machine. The decision is read from the model's next-token probabilities for lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network.
+
+Setup for the TypeSafe API:
+1. Install the SDK in the Python environment that runs ComfyUI:
+   ```bash
+   pip install typesafe-sdk
+   ```
+2. Create `api_key.txt` in the actual installation directory of this custom node and add your TypeSafe API key (single line, no quotes):
+   ```
+   ComfyUI/custom_nodes/<your-installation-folder>/api_key.txt
+   ```
+   The key is read from this file on every run; the `TYPESAFE_API_KEY` environment variable is not used. `api_key.txt` is listed in `.gitignore`; never commit it.
+
+Setup for local models:
 - Install [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) with GPU support for your platform in the Python environment that runs ComfyUI.
 - Put an instruction-tuned GGUF model with a chat template in `ComfyUI/models/LLM` (or `models/text_encoders`). Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
 
 Extra inputs:
-- `model`: GGUF model to use (`mmproj-*` files are hidden).
-- `max_jev_calls` (INT, default 8): maximum model evaluations per run. Identical questions within a run are evaluated only once.
-- `keep_model_loaded` (BOOLEAN, default true): keep the model in memory between runs. Turn it off to free VRAM after each run.
+- `model`: `TypeSafe API`, or a local GGUF model (`mmproj-*` files are hidden).
+- `max_jev_calls` (INT, default 8): maximum API requests or model evaluations per run. Identical questions within a run are asked only once.
+- `keep_model_loaded` (BOOLEAN, default true): keep the local model in memory between runs. Turn it off to free VRAM after each run. Ignored for the TypeSafe API.
 
 Functions (`state` is a string, dict, or list; text only):
 - `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
 - `jev.noul(state, question)` → yes-probability (`0.0`–`1.0`). Compare it with a threshold; using it directly as a condition raises an error.
-- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of 2–16 labels, or a dict of labels to descriptions.
-- `jev.probabilities(state, question, options)` → `dict` of each option to its probability (sums to `1.0`). Same `options` as `jev.choice`; asking both with the same arguments runs the model once.
-- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`) for 2–16 ordered level descriptions
+- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of labels, or a dict of labels to descriptions (2–16 options for local models).
+- `jev.probabilities(state, question, options)` → `dict` of each option to its probability (sums to `1.0`). Same `options` as `jev.choice`; asking both with the same arguments asks the model once.
+- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`) for ordered level descriptions (2–16 levels for local models)
 
 ```python
 # it1: a prompt text
@@ -111,10 +125,23 @@ ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape'
 
 The node's default script picks one of eight aspect ratios for the prompt in `it1`, sizes it to the megapixels in `in_value_1` (default `1.0` when unconnected; width and height rounded to multiples of 64), outputs the width and height to `out_value_1` / `out_value_2`, and lists every ratio's probability in `out_text_1`.
 
+Each function asks one question. With the TypeSafe API it maps to one `system_one` request of the [TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/):
+
+| ScriptFlow | TypeSafe SDK |
+| --- | --- |
+| `jev.noul(state, q)` | `client.system_one(state=state, questions={"q": Noul(instructions=q)}).answers["q"].noul` |
+| `jev.yes(state, q, t)` | `... .answers["q"].noul >= t` |
+| `jev.choice(state, q, options)` | `client.system_one(state=state, questions={"q": Choice(instructions=q, criteria=options)}).answers["q"].choice` |
+| `jev.probabilities(state, q, options)` | `... .answers["q"].probabilities` (same request as `jev.choice`) |
+| `jev.score(state, q, levels)` | `client.system_one(state=state, questions={"q": Score(instructions=q, criteria=levels)}).answers["q"].score` |
+
+A list of `options` is sent as `criteria={label: None, ...}`. `confidence`, the Score level probabilities, and Noul `criteria` are not exposed.
+
 Notes:
-- Each question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU); the first question also loads the model.
-- Probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
-- `MultiOutputScript` itself never loads a model; `jev` is not available there.
+- The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
+- A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU); the first question also loads the model.
+- Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
+- `MultiOutputScript` itself never loads a model or makes network requests; `jev` is not available there.
 
 ### `centi`
 **Category:** `utils`

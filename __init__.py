@@ -14,14 +14,24 @@ import ast
 import datetime
 import math
 import random
+from pathlib import Path
 from typing import Any, Dict
 
-from .jev_backend import JevBackend, list_local_models, unload_local_model
+from .jev_backend import (
+    JevBackend,
+    LocalJev,
+    TypeSafeClient,
+    TypeSafeJev,
+    list_local_models,
+    unload_local_model,
+)
 
 
 _DEFAULT_MAX_STEPS = 10000
 _DEFAULT_MAX_CALL_DEPTH = 32
 _MAX_RANGE_SIZE = 10000
+_API_KEY_PATH = Path(__file__).resolve().parent / "api_key.txt"
+_TYPESAFE_API = "TypeSafe API"
 
 _BLOCKED_AST_NODES = (
     ast.Import,
@@ -899,7 +909,7 @@ class MultiOutputScriptJev(MultiOutputScript):
             "    lines.append(f\"{ratio}: {probs[ratio]:.3f}\")\n"
             "ot1 = \"\\n\".join(lines)\n"
         )
-        types["required"]["model"] = (list(list_local_models()),)
+        types["required"]["model"] = ([_TYPESAFE_API] + list(list_local_models()),)
         types["required"]["max_jev_calls"] = ("INT", {"default": 8, "min": 1, "max": 64})
         types["required"]["keep_model_loaded"] = ("BOOLEAN", {"default": True})
         return types
@@ -917,23 +927,33 @@ class MultiOutputScriptJev(MultiOutputScript):
         in_value_2: Any = None,
         in_value_3: Any = None,
     ):
+        inputs = (in_text_1, in_text_2, in_text_3, in_value_1, in_value_2, in_value_3)
+        if model == _TYPESAFE_API:
+            with _typesafe_client() as client:
+                return _run_script(code, JevBackend(TypeSafeJev(client), max_jev_calls), *inputs)
         model_path = list_local_models().get(model)
         if model_path is None:
             raise ValueError(f"GGUF model not found under models/LLM or models/text_encoders: {model}")
         try:
-            return _run_script(
-                code,
-                JevBackend(model_path, max_jev_calls),
-                in_text_1,
-                in_text_2,
-                in_text_3,
-                in_value_1,
-                in_value_2,
-                in_value_3,
-            )
+            return _run_script(code, JevBackend(LocalJev(model_path), max_jev_calls), *inputs)
         finally:
             if not keep_model_loaded:
                 unload_local_model()
+
+
+def _typesafe_client() -> Any:
+    if TypeSafeClient is None:
+        raise RuntimeError("typesafe-sdk is not installed. Run: pip install typesafe-sdk")
+    if not _API_KEY_PATH.exists():
+        raise EnvironmentError(
+            f"API key file not found: {_API_KEY_PATH}\nPlease create this file with your TypeSafe API key."
+        )
+    api_key = _API_KEY_PATH.read_text(encoding="utf-8").strip()
+    if not api_key:
+        raise EnvironmentError(
+            f'API key is not set in "{_API_KEY_PATH}"\nPlease add your TypeSafe API key to this file.'
+        )
+    return TypeSafeClient(api_key=api_key)
 
 
 def _run_script(
