@@ -1,11 +1,27 @@
 # ComfyUI-ScriptFlow
 
-**Version:** 1.2.0
+**Version:** 1.3.0
 **License:** GPL-3.0
 
-A general-purpose calculation node that evaluates a safe Python-like script subset and returns multiple text and numeric outputs based on the inputs.
+Safe Python-like script node for ComfyUI with a System One decision model.
+Ask yes/no, choice, and score questions via TypeSafe AI's Jev API, with local GGUF LLMs as a fallback, and use the answer directly in an `if` statement.
 
-This custom node accepts numbers (int/float) and text (string) as inputs, runs calculations and logical operations internally, and returns multiple values through separate output ports. It consolidates workflows that previously required combining several basic nodes into a single node.
+![MultiOutputScript (Jev) demo](images/MultiOutputScript_Jev.gif)
+
+`MultiOutputScript (Jev)` picks an aspect ratio for a text prompt through the TypeSafe API, lists every ratio's probability, and passes the width and height to an image node.
+
+A simplified version of the demo: connect a text prompt to `in_text_1`, and the answer picks the width and height.
+
+```python
+if jev.yes(it1, "Does a portrait orientation suit this prompt?"):
+    ov1, ov2 = 832, 1280
+else:
+    ov1, ov2 = 1280, 832
+```
+
+A System One model answers with probabilities in a single fast pass instead of generating text, so the answer can drive workflow logic directly.
+
+Multiple inputs and outputs let one node handle math, logic, text editing, conditional routing, resolution selection, filename generation, and more — work that previously took several basic nodes. Scripts run in a restricted interpreter with no file or OS access.
 
 ## Installation
 
@@ -16,11 +32,33 @@ This custom node accepts numbers (int/float) and text (string) as inputs, runs c
    ```
 3. Restart ComfyUI.
 
+The `MultiOutputScript` and `centi` nodes need no extra packages. `MultiOutputScript (Jev)` needs the setup below for the backend you use.
+
+### For `MultiOutputScript (Jev)`
+
+#### TypeSafe API
+
+1. Install the SDK in the Python environment that runs ComfyUI:
+   ```bash
+   pip install typesafe-sdk
+   ```
+2. Create `api_key.txt` in the actual installation directory of this custom node and add your TypeSafe API key (single line, no quotes):
+   ```
+   ComfyUI/custom_nodes/<your-installation-folder>/api_key.txt
+   ```
+   The key is read from this file on every run; the `TYPESAFE_API_KEY` environment variable is not used. `api_key.txt` is listed in `.gitignore`; never commit it.
+
+#### Local models (fallback)
+
+- Install [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) with GPU support for your platform in the Python environment that runs ComfyUI. Tested with the JamePeng fork and the upstream [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35. A CPU-only build works but is much slower.
+- Put an instruction-tuned GGUF model with a chat template in `ComfyUI/models/LLM` (or `models/text_encoders`). Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
+
 ## Key Features
 - Multiple inputs: freely combine numeric and text inputs.
 - Calculations and logic: supports arithmetic, comparison, and simple conditional branching.
 - Multiple outputs: pass results to downstream nodes via separate output ports.
-- Safer execution: AST interpreter with restricted syntax and no file/OS access.
+- AI decisions: `jev.yes` / `jev.choice` / `jev.score` in `MultiOutputScript (Jev)`, with probabilities, through TypeSafe AI's Jev API or a local GGUF model as a fallback.
+- Safer execution: scripts run in an AST interpreter with restricted syntax and no file/OS access. Only the Jev node's `jev` functions reach a model or the TypeSafe API.
 
 ## Use Cases
 - In Wan2.2 I2V workflows, automatically select a recommended resolution
@@ -28,7 +66,9 @@ This custom node accepts numbers (int/float) and text (string) as inputs, runs c
 - Batch-generate file names (e.g., local LLM prompt history, output logs).
 - Apply conditional logic to control workflow behavior (e.g., switch parameters or routes based on inputs).
 - Parse and transform LLM outputs into structured values for downstream nodes.
-Dynamically generate numeric parameters (e.g., seeds, thresholds, scaling values) using custom calculations.
+- Dynamically generate numeric parameters (e.g., seeds, thresholds, scaling values) using custom calculations.
+- Pick an aspect ratio and size for a text prompt before generation, with the probability of every ratio (Jev node default script).
+- Route workflows by the meaning of text, e.g. check whether a prompt describes a night scene or classify its main subject.
 
 ## Nodes
 
@@ -77,30 +117,16 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 ### `MultiOutputScript (Jev)`
 **Category:** `utils`
 
-Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that answers typed questions about text. Scripts are the same for both backends:
+Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` namespace that asks [Jev](https://typesafe.ai), TypeSafe AI's decision model, typed questions about text and lets scripts branch on the answer.
 
-- **TypeSafe API**: asks [Jev](https://typesafe.ai), TypeSafe AI's decision model, over the internet.
-- **Local GGUF model**: runs on your machine. The decision is read from the model's next-token probabilities for lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network.
+- **TypeSafe API** (primary): sends the questions to Jev over the internet.
+- **Local GGUF model** (fallback): for when the Jev API is not available, or when text must stay on your machine. It approximates Jev-style decisions with a general instruction-tuned model, reading the answer from next-token probabilities of lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network. Answers and probabilities differ from Jev's.
 
-Setup for the TypeSafe API:
-1. Install the SDK in the Python environment that runs ComfyUI:
-   ```bash
-   pip install typesafe-sdk
-   ```
-2. Create `api_key.txt` in the actual installation directory of this custom node and add your TypeSafe API key (single line, no quotes):
-   ```
-   ComfyUI/custom_nodes/<your-installation-folder>/api_key.txt
-   ```
-   The key is read from this file on every run; the `TYPESAFE_API_KEY` environment variable is not used. `api_key.txt` is listed in `.gitignore`; never commit it.
-
-Setup for local models:
-- Install [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) with GPU support for your platform in the Python environment that runs ComfyUI.
-- Put an instruction-tuned GGUF model with a chat template in `ComfyUI/models/LLM` (or `models/text_encoders`). Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
+Scripts are the same for both. See [Installation](#installation) for the setup of each backend.
 
 Extra inputs:
 - `model`: `TypeSafe API`, or a local GGUF model (`mmproj-*` files are hidden).
 - `max_jev_calls` (INT, default 8): maximum API requests or model evaluations per run. Identical questions within a run are asked only once.
-- `keep_model_loaded` (BOOLEAN, default true): keep the local model in memory between runs. Turn it off to free VRAM after each run. Ignored for the TypeSafe API.
 
 Functions (`state` is a string, dict, or list; text only):
 - `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
@@ -139,9 +165,10 @@ A list of `options` is sent as `criteria={label: None, ...}`. `confidence`, the 
 
 Notes:
 - The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
-- A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU); the first question also loads the model.
+- A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
 - Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
 - `MultiOutputScript` itself never loads a model or makes network requests; `jev` is not available there.
+- This project is independent and not affiliated with TypeSafe AI.
 
 ### `centi`
 **Category:** `utils`
@@ -207,11 +234,6 @@ The script is parsed with Python AST and evaluated by ScriptFlow's safe interpre
 - Use only trusted scripts/workflows. Do not run untrusted code from unknown sources.
 
 ## Examples
-
-### Demo
-![Demo](images/MultiOutputScript.gif)
-
-Demonstrates running the sample workflow with a landscape image and a portrait image.
 
 ### Example Workflow
 
@@ -419,33 +441,19 @@ You should have received a copy of the GNU General Public License along with thi
 ## Support
 
 - **Issues**: Report bugs or request features via GitHub Issues
+- **Documentation**: See [CHANGELOG.md](CHANGELOG.md) for version history
 - **Examples**: Check [examples/](examples/) for workflow templates
 
 ---
 
-## Release Notes
-### 1.2.0
-- Replaced direct Python execution with a safe AST interpreter for ComfyUI Registry compatibility.
-- Added Python-subset support for helper functions, loops, dictionaries, lists, string methods, f-strings, `random`, `datetime`, and `math`.
-- Replaced trace-based timeout handling with step and loop limits.
-- Kept existing `MultiOutputScript` inputs and outputs unchanged.
+## Changelog
 
-### 1.1.1
-- Added safe-mode AST validation before script execution.
-- Blocked unsafe syntax (`Import`, `ImportFrom`, `Global`, `Nonlocal`, `ClassDef`, `Try`, `With`, `AsyncWith`).
-- Blocked unsafe dynamic execution, file/input access, namespace inspection, and dynamic attribute mutation calls.
-- Added execution timeout guard (`1.5s` default) to stop runaway scripts.
-- Updated security notes for trusted-workflow usage.
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### 1.1.0
-Added `centi` node (`utils`).
-- Minimal connector-only utility node.
-- Three optional integer inputs: `int_1`, `int_2`, `int_3`.
-- Three float outputs: `float_1`, `float_2`, `float_3`.
-- Each connected input is converted by `int_n / 100`; unconnected inputs return `None`.
-
-### 1.0.1
-- Improved documentation and project metadata.
-
-### 1.0.0
-- Initial release
+### Current Version: 1.3.0
+- Added `MultiOutputScript (Jev)` node with a `jev` namespace for typed decisions in scripts
+- Added `jev.yes`, `jev.noul`, `jev.choice`, `jev.probabilities`, and `jev.score`
+- Added TypeSafe API backend with the API key read from `api_key.txt`
+- Added local GGUF backend through llama-cpp-python, adapted from SemIf (OpenJev)
+- Added a default script that picks one of eight aspect ratios and sizes it from megapixels
+- Kept `MultiOutputScript` and `centi` unchanged
