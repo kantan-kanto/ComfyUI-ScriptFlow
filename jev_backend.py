@@ -20,7 +20,7 @@ import folder_paths
 import numpy as np
 
 try:
-    from llama_cpp import Llama, llama_get_memory, llama_memory_clear
+    from llama_cpp import Llama, llama_get_logits_ith, llama_get_memory, llama_memory_clear
     from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 except ImportError:
     Llama = None
@@ -142,7 +142,9 @@ def _option_probabilities(model_path: str, state: Any, question: Any, options: l
     llama_memory_clear(llama_get_memory(llm.ctx), True)
     llm.reset()
     llm.eval(tokens)
-    logits = llm.scores[0, slots].astype(np.float64)
+    # Llama.scores is not filled without logits_all in upstream llama-cpp-python, so read the context directly
+    vocabulary = np.ctypeslib.as_array(llama_get_logits_ith(llm.ctx, -1), shape=(llm.n_vocab(),))
+    logits = vocabulary[slots].astype(np.float64)
     weights = np.exp(logits - logits.max())
     return (weights / weights.sum()).tolist()
 
