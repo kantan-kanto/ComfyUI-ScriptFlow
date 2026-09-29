@@ -3,7 +3,7 @@
 
 ---
 
-**Version:** 1.3.0
+**Version:** 1.3.1
 **License:** GPL-3.0
 
 System One の判断モデルを使える、安全な Python 風スクリプトノードです。
@@ -454,7 +454,9 @@ You should have received a copy of the GNU General Public License along with thi
 
 詳しいバージョン履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
-### 現在のバージョン：1.3.0
+### 現在のバージョン：1.3.1
+- ComfyUI Registry への公開を修正：ローカル Jev バックエンドが llama.cpp の API で直接推論するようにし、Registry の動的実行スキャンでの誤検知を回避
+- ComfyUI Registry に公開されなかった 1.3.0 の以下の変更を含む
 - テキストについての型付きの判断をスクリプトで使える `jev` 名前空間付きの `MultiOutputScript (Jev)` ノードを追加
 - `jev.yes`、`jev.noul`、`jev.choice`、`jev.probabilities`、`jev.score` を追加
 - `api_key.txt` から API キーを読み込む TypeSafe API バックエンドを追加

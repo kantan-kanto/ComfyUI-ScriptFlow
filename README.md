@@ -1,7 +1,7 @@
 # ComfyUI-ScriptFlow
 [en | [ja](README.ja.md)]
 
-**Version:** 1.3.0
+**Version:** 1.3.1
 **License:** GPL-3.0
 
 Safe Python-like script node for ComfyUI with a System One decision model.
@@ -452,7 +452,9 @@ You should have received a copy of the GNU General Public License along with thi
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### Current Version: 1.3.0
+### Current Version: 1.3.1
+- Fixed ComfyUI Registry publishing: the local Jev backend now decodes through the llama.cpp API directly, avoiding a false positive in the Registry's dynamic-execution scan
+- Includes the 1.3.0 changes below, which were not published to the ComfyUI Registry
 - Added `MultiOutputScript (Jev)` node with a `jev` namespace for typed decisions in scripts
 - Added `jev.yes`, `jev.noul`, `jev.choice`, `jev.probabilities`, and `jev.score`
 - Added TypeSafe API backend with the API key read from `api_key.txt`

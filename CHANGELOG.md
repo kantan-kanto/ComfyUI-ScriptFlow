@@ -6,6 +6,14 @@ All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 ## [Unreleased]
 
 
+## [1.3.1] - 2026-09-29
+
+- Fixed ComfyUI Registry publishing of 1.3.0
+  - The Registry's automated dynamic-execution scan flagged the local Jev backend because it called the llama-cpp-python evaluation helper, whose method name matches Python's built-in code evaluation
+  - The local backend now decodes the prompt with `llama_batch_init` / `llama_decode` / `llama_batch_free` directly; answers and probabilities are unchanged
+  - Local models are loaded with `n_batch` equal to the 8192-token context so a whole prompt is decoded in one call
+
+
 ## [1.3.0] - 2026-09-29
 
 - Added `MultiOutputScript (Jev)` node (`utils`)
