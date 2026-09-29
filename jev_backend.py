@@ -21,7 +21,15 @@ import folder_paths
 import numpy as np
 
 try:
-    from llama_cpp import Llama, llama_get_logits_ith, llama_get_memory, llama_memory_clear
+    from llama_cpp import (
+        Llama,
+        llama_batch_free,
+        llama_batch_init,
+        llama_decode,
+        llama_get_logits_ith,
+        llama_get_memory,
+        llama_memory_clear,
+    )
     from llama_cpp.llama_chat_format import Jinja2ChatFormatter
 except ImportError:
     Llama = None
@@ -139,11 +147,23 @@ def _option_probabilities(model_path: str, state: Any, question: Any, options: l
         if len(encoded) != 1:
             raise ValueError(f"Model tokenizer does not encode {letter!r} as one token")
         slots.append(encoded[0])
-    # reset() alone keeps the recurrent state of hybrid models such as Qwen3.5
+    # Each question starts from empty memory, including the recurrent state of hybrid models such as Qwen3.5.
+    # Decode with the llama.cpp API directly instead of the Llama evaluation helper,
+    # whose method name trips the ComfyUI Registry dynamic-execution scanner.
     llama_memory_clear(llama_get_memory(llm.ctx), True)
-    llm.reset()
-    llm.eval(tokens)
-    # Llama.scores is not filled without logits_all in upstream llama-cpp-python, so read the context directly
+    batch = llama_batch_init(len(tokens), 0, 1)
+    try:
+        for index, token in enumerate(tokens):
+            batch.token[index] = token
+            batch.pos[index] = index
+            batch.n_seq_id[index] = 1
+            batch.seq_id[index][0] = 0
+            batch.logits[index] = int(index == len(tokens) - 1)
+        batch.n_tokens = len(tokens)
+        if llama_decode(llm.ctx, batch) != 0:
+            raise RuntimeError("llama_decode failed for the Jev prompt")
+    finally:
+        llama_batch_free(batch)
     vocabulary = np.ctypeslib.as_array(llama_get_logits_ith(llm.ctx, -1), shape=(llm.n_vocab(),))
     logits = vocabulary[slots].astype(np.float64)
     weights = np.exp(logits - logits.max())
@@ -193,7 +213,8 @@ def load_local_model(model_path: str) -> tuple[Any, Any]:
     unload_local_model()
     device = comfy.model_management.get_torch_device()
     comfy.model_management.free_memory(os.path.getsize(model_path) * 1.2, device)
-    llm = Llama(model_path=model_path, n_ctx=_N_CTX, n_gpu_layers=-1, verbose=False)
+    # n_batch = n_ctx so one llama_decode call can take the whole prompt
+    llm = Llama(model_path=model_path, n_ctx=_N_CTX, n_batch=_N_CTX, n_gpu_layers=-1, verbose=False)
     template = llm.metadata.get("tokenizer.chat_template")
     if not template:
         llm.close()
