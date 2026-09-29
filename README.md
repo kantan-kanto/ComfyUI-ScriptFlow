@@ -1,4 +1,5 @@
 # ComfyUI-ScriptFlow
+[en | [ja](README.ja.md)]
 
 **Version:** 1.3.0
 **License:** GPL-3.0
@@ -46,12 +47,12 @@ The `MultiOutputScript` and `centi` nodes need no extra packages. `MultiOutputSc
    ```
    ComfyUI/custom_nodes/<your-installation-folder>/api_key.txt
    ```
-   The key is read from this file on every run; the `TYPESAFE_API_KEY` environment variable is not used. `api_key.txt` is listed in `.gitignore`; never commit it.
+   The key is read from this file on every run. `api_key.txt` is listed in `.gitignore`; never commit it.
 
 #### Local models (fallback)
 
-- Install [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) with GPU support for your platform in the Python environment that runs ComfyUI. Tested with the JamePeng fork and the upstream [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35. A CPU-only build works but is much slower.
-- Put an instruction-tuned GGUF model with a chat template in `ComfyUI/models/LLM` (or `models/text_encoders`). Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
+- Install [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) in the Python environment that runs ComfyUI. Tested with the JamePeng fork and the upstream [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35.
+- Put an instruction-tuned GGUF model in `ComfyUI/models/LLM` (or `models/text_encoders`). The GGUF must include a chat template (`tokenizer.chat_template` metadata), as most instruction-tuned GGUFs do. Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
 
 ## Key Features
 - Multiple inputs: freely combine numeric and text inputs.
@@ -167,7 +168,7 @@ Notes:
 - The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
 - A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
 - Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
-- `MultiOutputScript` itself never loads a model or makes network requests; `jev` is not available there.
+- `MultiOutputScript` never loads a model or makes network requests; `jev` is not available there.
 - This project is independent and not affiliated with TypeSafe AI.
 
 ### `centi`
@@ -199,6 +200,7 @@ The script is parsed with Python AST and evaluated by ScriptFlow's safe interpre
 - `enumerate`, `range`, `zip`
 - `any`, `all`, `pow`, `divmod`
 - `list`, `dict`, `tuple`
+- `jev.yes`, `jev.noul`, `jev.choice`, `jev.probabilities`, `jev.score` (`MultiOutputScript (Jev)` only; see [its section](#multioutputscript-jev))
 
 ### Allowed namespaces
 - `random`: `random`, `randint`, `uniform`, `choice`
