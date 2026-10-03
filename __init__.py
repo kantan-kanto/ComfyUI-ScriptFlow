@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .jev_backend import (
+    UNANSWERED,
     JevBackend,
     LocalJev,
+    NeedAnswers,
     TypeSafeClient,
     TypeSafeJev,
     list_local_models,
@@ -194,11 +196,13 @@ class _SafeScriptInterpreter:
     def __init__(
         self,
         variables: Dict[str, Any],
+        now: datetime.datetime,
         max_steps: int = _DEFAULT_MAX_STEPS,
         max_call_depth: int = _DEFAULT_MAX_CALL_DEPTH,
         jev: JevBackend | None = None,
     ):
         self.frames = [variables]
+        self.now = now
         self.jev = jev
         self.max_steps = max_steps
         self.max_call_depth = max_call_depth
@@ -392,6 +396,9 @@ class _SafeScriptInterpreter:
         if name == "int":
             return int(*args)
         if name == "float":
+            # float() of a queued probability stays queued so storing it does not end the batch.
+            if len(args) == 1 and args[0] is UNANSWERED:
+                return UNANSWERED
             return float(*args)
         if name == "str":
             return str(*args)
@@ -500,11 +507,11 @@ class _SafeScriptInterpreter:
         if namespace == "datetime.datetime" and name == "now":
             if args:
                 raise ValueError("datetime.datetime.now() expects no arguments")
-            return datetime.datetime.now()
+            return self.now
         if namespace == "datetime.date" and name == "today":
             if args:
                 raise ValueError("datetime.date.today() expects no arguments")
-            return datetime.date.today()
+            return self.now.date()
         if namespace == "math" and name in _SAFE_MATH_FUNCTIONS:
             return self._call_math(name, args)
         if namespace == "jev":
@@ -516,11 +523,13 @@ class _SafeScriptInterpreter:
             if len(args) not in (2, 3):
                 raise ValueError("jev.yes() expects 2 or 3 arguments")
             threshold = args[2] if len(args) == 3 else 0.5
-            return self.jev.noul(args[0], args[1]) >= threshold
+            p = self.jev.noul(args[0], args[1])
+            return p if p is UNANSWERED else p >= threshold
         if name == "noul":
             if len(args) != 2:
                 raise ValueError("jev.noul() expects 2 arguments")
-            return _JevProbability(self.jev.noul(*args))
+            p = self.jev.noul(*args)
+            return p if p is UNANSWERED else _JevProbability(p)
         if name == "choice":
             if len(args) != 3:
                 raise ValueError("jev.choice() expects 3 arguments")
@@ -680,6 +689,8 @@ class _SafeScriptInterpreter:
             return left > right
         if isinstance(op, ast.GtE):
             return left >= right
+        if isinstance(op, (ast.Is, ast.IsNot)) and (left is UNANSWERED or right is UNANSWERED):
+            raise NeedAnswers()
         if isinstance(op, ast.Is):
             return left is right
         if isinstance(op, ast.IsNot):
@@ -868,7 +879,7 @@ class MultiOutputScript:
         in_value_3: Any = None,
     ):
         return _run_script(
-            code, None, in_text_1, in_text_2, in_text_3, in_value_1, in_value_2, in_value_3
+            code, None, datetime.datetime.now(), in_text_1, in_text_2, in_text_3, in_value_1, in_value_2, in_value_3
         )
 
 
@@ -926,21 +937,38 @@ class MultiOutputScriptJev(MultiOutputScript):
         inputs = (in_text_1, in_text_2, in_text_3, in_value_1, in_value_2, in_value_3)
         if model == _TYPESAFE_API:
             with _typesafe_client() as client:
-                return _run_jev_script(code, JevBackend(TypeSafeJev(client), max_jev_calls), inputs)
+                return _run_jev_script(code, JevBackend(TypeSafeJev(client), max_jev_calls, True), inputs)
         model_path = list_local_models().get(model)
         if model_path is None:
             raise ValueError(f"GGUF model not found under models/LLM or models/text_encoders: {model}")
         try:
-            return _run_jev_script(code, JevBackend(LocalJev(model_path), max_jev_calls), inputs)
+            return _run_jev_script(code, JevBackend(LocalJev(model_path), max_jev_calls, False), inputs)
         finally:
             unload_local_model()
 
 
 def _run_jev_script(code: str, jev: JevBackend, inputs: tuple):
+    """Reruns the script until it finishes, asking the questions queued before each stop in one batch.
+
+    Every rerun starts from the same random state and clock, so it asks the same questions as the run before.
+    A script error while questions are queued may come from a queued answer, so those are asked and the script reruns.
+    """
+    random_state = random.getstate()
+    now = datetime.datetime.now()
     try:
-        return _run_script(code, jev, *inputs)
+        while True:
+            random.setstate(random_state)
+            try:
+                return _run_script(code, jev, now, *inputs)
+            except Exception:
+                if not jev.pending:
+                    raise
+                jev.flush()
     finally:
-        print(f"[ComfyUI-ScriptFlow] Jev requests: {jev.calls}, responses: {jev.responses}")
+        print(
+            f"[ComfyUI-ScriptFlow] Jev requests: {jev.requests}, states: {len(jev.states)}, "
+            f"questions: {jev.questions}, responses: {jev.responses}"
+        )
 
 
 def _typesafe_client() -> Any:
@@ -961,6 +989,7 @@ def _typesafe_client() -> Any:
 def _run_script(
     code: str,
     jev: JevBackend | None,
+    now: datetime.datetime,
     in_text_1: Any,
     in_text_2: Any,
     in_text_3: Any,
@@ -990,7 +1019,7 @@ def _run_script(
         "ov3": None,
     }
 
-    locals_dict = _SafeScriptInterpreter(locals_dict, jev=jev).run(code)
+    locals_dict = _SafeScriptInterpreter(locals_dict, now, jev=jev).run(code)
 
     _validate_outputs(locals_dict)
 

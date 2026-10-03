@@ -15,6 +15,7 @@ import gc
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import comfy.model_management
@@ -38,7 +39,7 @@ except ImportError:
 try:
     from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
     # One INFO line pair per request floods the console; the run summary is printed instead.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     logging.getLogger("typesafe_sdk").setLevel(logging.WARNING)
 except ImportError:
     TypeSafeClient = None
@@ -54,79 +55,155 @@ _N_CTX = 8192
 _loaded_model: tuple[str, Any, Any] | None = None
 
 
-class JevBackend:
-    """Caches answers and limits model calls for a single script run."""
+class NeedAnswers(Exception):
+    """Raised when a script uses an answer that is still queued."""
 
-    def __init__(self, engine: Any, max_calls: int):
+
+class _Unanswered:
+    """Stands in for a queued answer. Storing or passing it is fine; using its value raises NeedAnswers."""
+
+    def _need(self, *args: Any) -> Any:
+        raise NeedAnswers()
+
+    __bool__ = __eq__ = __ne__ = __lt__ = __le__ = __gt__ = __ge__ = __hash__ = _need
+    __str__ = __repr__ = __format__ = __float__ = __int__ = __index__ = _need
+    __len__ = __iter__ = __contains__ = __getitem__ = _need
+
+
+UNANSWERED = _Unanswered()
+
+
+def _json_default(value: Any) -> Any:
+    if value is UNANSWERED:
+        raise NeedAnswers()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+class JevBackend:
+    """Queues questions during a script run and asks them in batches, one request per state.
+
+    The caller reruns the script after each flush(); answered questions then return their values from the cache.
+    max_calls limits the number of requests.
+    """
+
+    def __init__(self, engine: Any, max_calls: int, parallel: bool):
         self.engine = engine
         self.max_calls = max_calls
-        self.calls = 0
+        self.parallel = parallel
+        self.requests = 0
         self.responses = 0
-        self.cache: dict[str, Any] = {}
+        self.questions = 0
+        self.states: set[str] = set()
+        self.cache: dict[str, list[float]] = {}
+        self.pending: dict[str, tuple] = {}
 
-    def noul(self, state: Any, question: Any) -> float:
-        return self._ask(state, "noul", question, None)[0]
+    def noul(self, state: Any, question: Any) -> Any:
+        probabilities = self._ask(state, "noul", question, None)
+        return UNANSWERED if probabilities is None else probabilities[0]
 
-    def choice(self, state: Any, question: Any, options: list | dict) -> str:
+    def choice(self, state: Any, question: Any, options: list | dict) -> Any:
         probabilities = self.probabilities(state, question, options)
-        return max(probabilities, key=probabilities.get)
+        return UNANSWERED if probabilities is UNANSWERED else max(probabilities, key=probabilities.get)
 
-    def probabilities(self, state: Any, question: Any, options: list | dict) -> dict[str, float]:
+    def probabilities(self, state: Any, question: Any, options: list | dict) -> Any:
         if isinstance(options, list):
             options = {str(option): None for option in options}
-        return dict(zip(options, self._ask(state, "choice", question, options)))
+        probabilities = self._ask(state, "choice", question, options)
+        return UNANSWERED if probabilities is None else dict(zip(options, probabilities))
 
-    def score(self, state: Any, question: Any, levels: list) -> float:
+    def score(self, state: Any, question: Any, levels: list) -> Any:
         probabilities = self._ask(state, "score", question, list(levels))
-        return sum(level * p for level, p in enumerate(probabilities))
+        return UNANSWERED if probabilities is None else sum(level * p for level, p in enumerate(probabilities))
 
-    def _ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
-        key = json.dumps([state, kind, question, criteria], sort_keys=True, ensure_ascii=False)
+    def _ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float] | None:
+        key = json.dumps([state, kind, question, criteria], sort_keys=True, ensure_ascii=False, default=_json_default)
         if key in self.cache:
             return self.cache[key]
-        if self.calls >= self.max_calls:
-            raise RuntimeError(f"Script exceeded max_jev_calls ({self.max_calls})")
-        self.calls += 1
-        probabilities = self.engine.ask(state, kind, question, criteria)
-        self.responses += 1
-        self.cache[key] = probabilities
-        return probabilities
+        self.pending[key] = (state, kind, question, criteria)
+        return None
+
+    def flush(self) -> None:
+        groups: dict[str, list[str]] = {}
+        for key, (state, *_) in self.pending.items():
+            groups.setdefault(json.dumps(state, sort_keys=True, ensure_ascii=False), []).append(key)
+        if self.requests + len(groups) > self.max_calls:
+            raise RuntimeError(
+                f"Script needs more than max_jev_calls ({self.max_calls}) requests: "
+                f"{self.requests} sent, {len(groups)} more needed"
+            )
+        self.requests += len(groups)
+        self.questions += len(self.pending)
+        self.states.update(groups)
+        batches = list(groups.values())
+        self.pending, pending = {}, self.pending
+        if self.parallel and len(batches) > 1:
+            with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+                futures = [pool.submit(self._send, pending, keys) for keys in batches]
+            errors = [future.exception() for future in futures]
+            self.responses += errors.count(None)
+            for error in errors:
+                if error is not None:
+                    raise error
+            return
+        for keys in batches:
+            self._send(pending, keys)
+            self.responses += 1
+
+    def _send(self, pending: dict[str, tuple], keys: list[str]) -> None:
+        state = pending[keys[0]][0]
+        answers = self.engine.ask(state, [pending[key][1:] for key in keys])
+        for key, probabilities in zip(keys, answers):
+            self.cache[key] = probabilities
 
 
 class LocalJev:
-    """Answers with a local GGUF model. Noul is asked as Yes/No options."""
+    """Answers with a local GGUF model, one forward pass per question. Noul is asked as Yes/No options."""
 
     def __init__(self, model_path: str):
         self.model_path = model_path
 
-    def ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
-        if kind == "noul":
-            options = ["Yes", "No"]
-        elif kind == "choice":
-            options = [label if description is None else f"{label}: {description}" for label, description in criteria.items()]
-        else:
-            options = criteria
-        return _option_probabilities(self.model_path, state, question, options)
+    def ask(self, state: Any, questions: list[tuple]) -> list[list[float]]:
+        answers = []
+        for kind, question, criteria in questions:
+            if kind == "noul":
+                options = ["Yes", "No"]
+            elif kind == "choice":
+                options = [label if description is None else f"{label}: {description}" for label, description in criteria.items()]
+            else:
+                options = criteria
+            answers.append(_option_probabilities(self.model_path, state, question, options))
+        return answers
 
 
 class TypeSafeJev:
-    """Answers with TypeSafe's Jev API. Returns probabilities in the order of the options."""
+    """Answers with TypeSafe's Jev API, all questions about one state in one request.
+
+    Returns probabilities in the order of the options.
+    """
 
     def __init__(self, client: Any):
         self.client = client
 
-    def ask(self, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
-        if kind == "noul":
-            p = self._answer(state, Noul(instructions=question)).noul
-            return [p, 1.0 - p]
-        if kind == "choice":
-            probabilities = self._answer(state, Choice(instructions=question, criteria=criteria)).probabilities
-            return [probabilities[label] for label in criteria]
-        probabilities = self._answer(state, Score(instructions=question, criteria=criteria)).probabilities
-        return [probabilities[level] for level in range(len(criteria))]
-
-    def _answer(self, state: Any, question: Any) -> Any:
-        return self.client.system_one(state=state, questions={"q": question}).answers["q"]
+    def ask(self, state: Any, questions: list[tuple]) -> list[list[float]]:
+        typed = {}
+        for i, (kind, question, criteria) in enumerate(questions):
+            if kind == "noul":
+                typed[f"q{i}"] = Noul(instructions=question)
+            elif kind == "choice":
+                typed[f"q{i}"] = Choice(instructions=question, criteria=criteria)
+            else:
+                typed[f"q{i}"] = Score(instructions=question, criteria=criteria)
+        answers = self.client.system_one(state=state, questions=typed).answers
+        results = []
+        for i, (kind, _, criteria) in enumerate(questions):
+            answer = answers[f"q{i}"]
+            if kind == "noul":
+                results.append([answer.noul, 1.0 - answer.noul])
+            elif kind == "choice":
+                results.append([answer.probabilities[label] for label in criteria])
+            else:
+                results.append([answer.probabilities[level] for level in range(len(criteria))])
+        return results
 
 
 def _option_probabilities(model_path: str, state: Any, question: Any, options: list) -> list[float]:
