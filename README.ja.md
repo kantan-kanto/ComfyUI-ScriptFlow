@@ -3,7 +3,7 @@
 
 ---
 
-**Version:** 1.3.1
+**Version:** 1.3.2
 **License:** GPL-3.0
 
 System One の判断モデルを使える、安全な Python 風スクリプトノードです。
@@ -129,7 +129,7 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 
 追加の入力：
 - `model`：`TypeSafe API`、またはローカルの GGUF モデル（`mmproj-*` ファイルは表示されません）。
-- `max_jev_calls`（INT、初期値 8）：1 回の実行での API リクエストまたはモデル評価の上限です。同じ実行の中で同じ質問は 1 回しか問い合わせません。
+- `max_jev_calls`（INT、初期値 8）：1 回の実行での Jev リクエストの上限です。同じ `state` についての質問は 1 回のリクエストにまとめて送るため（[質問のまとめ送り](#質問のまとめ送り)を参照）、質問数ではなくリクエスト数を制限します。上限を超えるリクエストは送る前にエラーで止まります。同じ実行の中で同じ質問は 1 回しか問い合わせません。
 
 関数（`state` は文字列・辞書・リスト。テキストのみ）：
 - `jev.yes(state, question[, threshold])` → `bool`（Yes の確率が `threshold` 以上か。初期値 `0.5`）
@@ -154,7 +154,7 @@ ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape'
 
 ノードの初期スクリプトは、`it1` のプロンプトに合う 8 種類のアスペクト比から 1 つを選び、`in_value_1` のメガピクセル数（未接続時は `1.0`。幅と高さは 64 の倍数に丸め）に合わせてサイズを決めます。幅と高さを `out_value_1` / `out_value_2` に、各比率の確率を `out_text_1` に出力します。
 
-各関数は 1 つの質問をします。TypeSafe API を使う場合、[TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/) の `system_one` リクエスト 1 回に対応します。
+各関数は 1 つの質問をします。[TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/) で書いた場合のコードとの対応を示します。
 
 | ScriptFlow | TypeSafe SDK |
 | --- | --- |
@@ -166,12 +166,39 @@ ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape'
 
 リストで渡した `options` は `criteria={label: None, ...}` として送られます。`confidence`、Score の段階ごとの確率、Noul の `criteria` は利用できません。
 
+#### 質問のまとめ送り
+
+質問は可能な範囲でまとめて送られます。
+
+1. スクリプトの実行中、`jev` の質問はその場では送らず、順に溜めておきます。
+2. 答えを変数やリストに入れる、自分で定義した関数に渡す、`float()` を通す、といった使い方なら実行を続けます。`if` の条件、比較、計算、f 文字列、`sorted`、`join`、出力などで答えの値を初めて使ったところで、実行を止めます。
+3. 溜めた質問を `state` ごとに 1 回のリクエストで送り、スクリプトを最初から実行し直します。答えが分かった質問はその値を返し、新しい質問は同じように溜めます。
+
+`state` が違うリクエストは、TypeSafe API では同時に送り、ローカルモデルでは順に処理します。質問を 1 つずつ問い合わせる場合と同じ質問をし、同じ結果を出力します。1 回の実行の中では、実行し直すたびに `random` の状態と `datetime.datetime.now()` の時刻が同じところから始まるので、実行し直しても質問は変わりません。
+
+次の例では、`a` は `if` まで使われないので、`q1` と `q2` は 1 回のリクエストで送られます。`q3` は `a` が分かってから 2 回目のリクエストで送られます。
+
+```python
+a = jev.noul(it1, "q1")
+b = jev.noul(it1, "q2")
+if a > 0.5:
+    c = jev.noul(it1, "q3")
+```
+
+多くの質問を 1 回のリクエストで送るには、`state` を同じにして、質問ごとに違う内容は質問文に入れてください。
+
+TypeSafe API では、1 回のリクエストが [TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/) の `system_one` 呼び出し 1 回にあたります。上の例の 1 回目のリクエストは次のとおりです。
+
+```python
+client.system_one(state=it1, questions={"q0": Noul(instructions="q1"), "q1": Noul(instructions="q2")})
+```
+
 注意：
 - TypeSafe API は `state` と質問をインターネット経由で送信します。外部に出せないテキストには使わないでください。
 - ローカルモデルの質問は 1 回の順伝播で処理されます（GPU 上の 4B〜9B モデルで約 1〜1.5 秒）。モデルは実行ごとに最初の質問で読み込まれ（数秒）、実行が終わるとアンロードされて、ワークフローの残りのために VRAM を解放します。
 - ローカルモデルの確率は較正されておらず、モデルによって変わります。しきい値は実際の入力で試して決めてください。
-- 実行ごとにコンソールへ `[ComfyUI-ScriptFlow] Jev requests: N, responses: M` を出力します。返信数がリクエスト数より少なければ、途中のリクエストが失敗しています。同じ実行のキャッシュから答えた質問は数えません。
-- `typesafe-sdk` がインストールされていると、`httpx` と `typesafe_sdk` のロガーを WARNING に設定するため、リクエストごとの INFO ログは表示されません。`httpx` の設定はほかのカスタムノードにも適用されます。
+- 実行ごとにコンソールへ `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` を出力します。送ったリクエスト数、異なる `state` の数、質問数、返信があったリクエスト数です。返信数がリクエスト数より少なければ、途中のリクエストが失敗しています。同じ実行のキャッシュから答えた質問は数えません。
+- `typesafe-sdk` がインストールされていると、`httpx2`（SDK が使う HTTP クライアント）と `typesafe_sdk` のロガーを WARNING に設定するため、リクエストごとの INFO ログは表示されません。
 - `MultiOutputScript` はモデルを読み込まず、ネットワークにもアクセスしません。`jev` は使えません。
 - このプロジェクトは独立したもので、TypeSafe AI とは関係ありません。
 
@@ -225,6 +252,7 @@ ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape'
 
 ### 実行時の注意
 - `random` や `datetime` を使うと、出力は毎回変わる可能性があります。
+- v1.3.2 以降では、`datetime.datetime.now()` と `datetime.date.today()` は実行を開始した時刻を返すため、1 つのスクリプトの中で何度呼んでも同じ値になります。
 - v1.2.0 以降では、`datetime.strftime(...)` でタイムスタンプを簡潔に整形できます。
   ```python
   now = datetime.datetime.now()
@@ -456,12 +484,9 @@ You should have received a copy of the GNU General Public License along with thi
 
 詳しいバージョン履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
-### 現在のバージョン：1.3.1
-- ComfyUI Registry への公開を修正：ローカル Jev バックエンドが llama.cpp の API で直接推論するようにし、Registry の動的実行スキャンでの誤検知を回避
-- ComfyUI Registry に公開されなかった 1.3.0 の以下の変更を含む
-- テキストについての型付きの判断をスクリプトで使える `jev` 名前空間付きの `MultiOutputScript (Jev)` ノードを追加
-- `jev.yes`、`jev.noul`、`jev.choice`、`jev.probabilities`、`jev.score` を追加
-- `api_key.txt` から API キーを読み込む TypeSafe API バックエンドを追加
-- SemIf (OpenJev) をもとにした、llama-cpp-python によるローカル GGUF バックエンドを追加
-- 8 種類のアスペクト比から 1 つを選び、メガピクセル数からサイズを決める初期スクリプトを追加
-- `MultiOutputScript` と `centi` は変更なし
+### 現在のバージョン：1.3.2
+- `MultiOutputScript (Jev)` がスクリプトを変えずに質問をまとめて送るように：同じ `state` の質問は 1 回のリクエストで送り、`state` が違うリクエストは同時に送る
+- `max_jev_calls` が質問数ではなくリクエスト数を制限するように
+- 実行ごとに Jev のリクエスト数、`state` 数、質問数、返信数をコンソールに出力
+- TypeSafe SDK と HTTP クライアントのリクエストごとの INFO ログを非表示に
+- `datetime.datetime.now()` と `datetime.date.today()` が実行を開始した時刻を返すように

@@ -5,10 +5,19 @@ All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 ## [Unreleased]
 
-- `MultiOutputScript (Jev)` prints `[ComfyUI-ScriptFlow] Jev requests: N, responses: M` to the console after each run, including runs that end with an error
-  - Requests are API requests or local model evaluations; questions answered from the run's cache are not counted
-- Set the `httpx` and `typesafe_sdk` loggers to WARNING when `typesafe-sdk` is installed, removing two INFO lines per TypeSafe API request
-  - The `httpx` logger is shared, so its INFO lines from other custom nodes are hidden as well
+
+## [1.3.2] - 2026-10-03
+
+- `MultiOutputScript (Jev)` batches questions without script changes
+  - Questions are queued while the script runs; the run stops when the script first uses an answer's value, the queued questions are sent, and the script reruns from the start with the answers
+  - Questions about the same `state` are sent in one request (one TypeSafe `system_one` call with several questions); requests for different states are sent in parallel with the TypeSafe API and one after another with a local model
+  - Storing an answer, passing it to a user-defined function, or calling `float()` on it does not stop the run
+  - Scripts ask the same questions and produce the same outputs as before; each rerun starts from the same `random` state and time
+- Changed `max_jev_calls` to limit requests instead of questions; a run stops with an error before sending requests that would exceed it
+- `MultiOutputScript (Jev)` prints `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` to the console after each run, including runs that end with an error
+  - Questions answered from the run's cache are not counted
+- Set the `httpx2` and `typesafe_sdk` loggers to WARNING when `typesafe-sdk` is installed, removing two INFO lines per TypeSafe API request
+- `datetime.datetime.now()` and `datetime.date.today()` return the time the run started in both script nodes, so repeated calls in one script return the same value
 
 
 ## [1.3.1] - 2026-09-29

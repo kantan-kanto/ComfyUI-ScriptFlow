@@ -1,7 +1,7 @@
 # ComfyUI-ScriptFlow
 [en | [ja](README.ja.md)]
 
-**Version:** 1.3.1
+**Version:** 1.3.2
 **License:** GPL-3.0
 
 Safe Python-like script node for ComfyUI with a System One decision model.
@@ -127,7 +127,7 @@ Scripts are the same for both. See [Installation](#installation) for the setup o
 
 Extra inputs:
 - `model`: `TypeSafe API`, or a local GGUF model (`mmproj-*` files are hidden).
-- `max_jev_calls` (INT, default 8): maximum API requests or model evaluations per run. Identical questions within a run are asked only once.
+- `max_jev_calls` (INT, default 8): maximum Jev requests per run. Questions about the same `state` share one request (see [Batched questions](#batched-questions)), so this limits requests, not questions. A run stops with an error before sending requests that would exceed it. Identical questions within a run are asked only once.
 
 Functions (`state` is a string, dict, or list; text only):
 - `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
@@ -152,7 +152,7 @@ ot1 = f"{kind} (portrait: {probs['portrait']:.3f}, landscape: {probs['landscape'
 
 The node's default script picks one of eight aspect ratios for the prompt in `it1`, sizes it to the megapixels in `in_value_1` (default `1.0` when unconnected; width and height rounded to multiples of 64), outputs the width and height to `out_value_1` / `out_value_2`, and lists every ratio's probability in `out_text_1`.
 
-Each function asks one question. With the TypeSafe API it maps to one `system_one` request of the [TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/):
+Each function asks one question. The table shows the equivalent code written with the [TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/):
 
 | ScriptFlow | TypeSafe SDK |
 | --- | --- |
@@ -164,12 +164,39 @@ Each function asks one question. With the TypeSafe API it maps to one `system_on
 
 A list of `options` is sent as `criteria={label: None, ...}`. `confidence`, the Score level probabilities, and Noul `criteria` are not exposed.
 
+#### Batched questions
+
+Questions are sent in batches where possible:
+
+1. While the script runs, each `jev` question is queued instead of being sent.
+2. Storing an answer in a variable or list, passing it to a function you defined, or calling `float()` on it keeps the run going. The run stops when the script first uses an answer's value: in an `if` condition, a comparison, arithmetic, an f-string, `sorted`, `join`, an output, and so on.
+3. The queued questions are sent, one request per `state`, and the script runs again from the start. Answered questions now return their values, and new questions are queued the same way.
+
+Requests for different states are sent in parallel with the TypeSafe API, and one after another with a local model. A script asks the same questions and produces the same outputs as when each question is asked on its own. Within one run, every rerun starts from the same `random` state and `datetime.datetime.now()` time, so the questions do not change between reruns.
+
+In this example, `q1` and `q2` go in one request because `a` is not used until the `if`. `q3` is sent in a second request after `a` is known:
+
+```python
+a = jev.noul(it1, "q1")
+b = jev.noul(it1, "q2")
+if a > 0.5:
+    c = jev.noul(it1, "q3")
+```
+
+To ask many questions in one request, keep the `state` the same and put what differs between questions in the question text.
+
+With the TypeSafe API, each request is one `system_one` call of the [TypeSafe Python SDK](https://pypi.org/project/typesafe-sdk/). The first request of the example above is:
+
+```python
+client.system_one(state=it1, questions={"q0": Noul(instructions="q1"), "q1": Noul(instructions="q2")})
+```
+
 Notes:
 - The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
 - A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
 - Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
-- Each run prints `[ComfyUI-ScriptFlow] Jev requests: N, responses: M` to the console; fewer responses than requests means a request failed. Questions answered from the run's cache are not counted.
-- When `typesafe-sdk` is installed, the `httpx` and `typesafe_sdk` loggers are set to WARNING, so per-request INFO lines are not shown. The `httpx` setting also applies to other custom nodes.
+- Each run prints `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` to the console: requests sent, distinct states, questions asked, and requests answered. Fewer responses than requests means a request failed. Questions answered from the run's cache are not counted.
+- When `typesafe-sdk` is installed, the `httpx2` (the SDK's HTTP client) and `typesafe_sdk` loggers are set to WARNING, so per-request INFO lines are not shown.
 - `MultiOutputScript` never loads a model or makes network requests; `jev` is not available there.
 - This project is independent and not affiliated with TypeSafe AI.
 
@@ -223,6 +250,7 @@ The script is parsed with Python AST and evaluated by ScriptFlow's safe interpre
 
 ### Execution Notes
 - Using `random` or `datetime` makes outputs non-deterministic.
+- In v1.3.2 or later, `datetime.datetime.now()` and `datetime.date.today()` return the time the run started, so repeated calls in one script return the same value.
 - `datetime.strftime(...)` is supported in v1.2.0 or later for concise timestamp formatting:
   ```python
   now = datetime.datetime.now()
@@ -454,12 +482,9 @@ You should have received a copy of the GNU General Public License along with thi
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### Current Version: 1.3.1
-- Fixed ComfyUI Registry publishing: the local Jev backend now decodes through the llama.cpp API directly, avoiding a false positive in the Registry's dynamic-execution scan
-- Includes the 1.3.0 changes below, which were not published to the ComfyUI Registry
-- Added `MultiOutputScript (Jev)` node with a `jev` namespace for typed decisions in scripts
-- Added `jev.yes`, `jev.noul`, `jev.choice`, `jev.probabilities`, and `jev.score`
-- Added TypeSafe API backend with the API key read from `api_key.txt`
-- Added local GGUF backend through llama-cpp-python, adapted from SemIf (OpenJev)
-- Added a default script that picks one of eight aspect ratios and sizes it from megapixels
-- Kept `MultiOutputScript` and `centi` unchanged
+### Current Version: 1.3.2
+- `MultiOutputScript (Jev)` batches questions without script changes: questions about the same `state` are sent in one request, and requests for different states are sent in parallel
+- `max_jev_calls` now limits requests instead of questions
+- Added a console summary of Jev requests, states, questions, and responses after each run
+- Hid the per-request INFO log lines of the TypeSafe SDK and its HTTP client
+- `datetime.datetime.now()` and `datetime.date.today()` return the time the run started
