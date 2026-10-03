@@ -621,9 +621,132 @@ Notes:
 - `in_text_2` takes the system prompt as plain text, or the text of a JSON config with a `"system_prompt"` key. `\uXXXX` escapes in the JSON are not decoded.
 - Lines starting with `#`, `【`, or `[...]` are headings. Under a heading, each line at the left margin is one rule, and indented lines belong to the rule above. Check `out_text_3` to see how your system prompt was split.
 - Sections whose heading contains a word in `SKIP_HEADINGS` are skipped, so examples and thinking steps are not judged as rules.
-- Only the first `MAX_RULES` rules are checked. A very long system prompt can exceed the script step limit.
+- Only the first `MAX_RULES` rules are checked. A very long system prompt exceeds the script step limit; see [Long system prompts](#long-system-prompts) below.
 - With the TypeSafe API, the system prompt, the enhancer output, and the user request are sent over the internet.
 - `out_text_3` and the numeric outputs are optional; `out_value_3` is unused.
+
+#### Long system prompts
+
+The script above checks the system prompt one line at a time, so a system prompt of several hundred lines stops with `Script exceeded step limit`.
+For those, use the script below. It cuts the system prompt into parts of about `PART_CHARS` characters at blank lines,
+and asks Jev whether the output breaks any instruction in each part. Connect the inputs and outputs the same way.
+
+```python
+# Score how well a prompt enhancer's output follows a long system prompt.
+# The system prompt is cut into parts of about PART_CHARS characters at blank lines,
+# and Jev is asked whether the output breaks any instruction in each part.
+#
+# Input:
+#   it1: the enhancer's output
+#   it2: the system prompt, as plain text or as the text of a JSON config
+#        that has a "system_prompt" key
+#   it3: the user's request (optional; used by instructions that refer to it)
+#
+# Output:
+#   ot1: report, most likely violations first
+#   ot2: likely violations only
+#   ot3: the parts the system prompt was cut into
+#   ov1: adherence score (0-100)
+#   ov2: number of parts with a likely violation
+#
+# Jev requests: 2 (one for all parts, one for the overall rating),
+# or 1 with OVERALL = False.
+
+PART_CHARS = 1000       # approximate size of one part; smaller parts mean more questions
+MAX_PARTS = 60          # parts beyond this are not checked
+THRESHOLD = 0.5         # a part counts as broken at this probability or above
+OVERALL = True          # also rate the output against the whole system prompt
+
+output = str(it1 or "").strip()
+sp = str(it2 or "")
+user_text = str(it3 or "").strip()
+
+if sp.strip().startswith("{"):
+    k = sp.find('"system_prompt"')
+    if k < 0:
+        raise ValueError("The JSON has no system_prompt key")
+    tail = sp[sp.find('"', sp.find(":", k) + 1) + 1:]
+    tail = tail.replace("\\\\", "\x00").replace('\\"', "\x01")
+    sp = tail[:tail.find('"')].replace("\\n", "\n").replace("\\t", "\t").replace("\x01", '"').replace("\x00", "\\")
+sp = sp.replace("\r\n", "\n").strip()
+
+# Cut at the first blank line after PART_CHARS characters, so no paragraph is split.
+parts = []
+pos = 0
+while pos < len(sp) and len(parts) < MAX_PARTS:
+    end = sp.find("\n\n", pos + PART_CHARS)
+    if end < 0:
+        end = len(sp)
+    parts.append(sp[pos:end].strip())
+    pos = end
+truncated = pos < len(sp)
+
+# Every part shares one state and goes in the question text,
+# so all parts are asked in one request.
+state = {"output": output}
+if user_text:
+    state["user_input"] = user_text
+results = []
+for i, part in enumerate(parts):
+    p = jev.noul(state, "Does the output clearly break any instruction in the part of the system prompt below? Answer no if the instructions do not concern the output, or if judging them needs a reference image or anything else not given here.\nPart of the system prompt:\n" + part)
+    results.append([float(p), i + 1])
+
+# The overall rating needs the whole system prompt as state, so it is a second request.
+# Asking it before the sort below sends it together with the parts.
+if OVERALL:
+    overall_state = {"system_prompt": sp, "output": output}
+    if user_text:
+        overall_state["user_input"] = user_text
+    level = jev.score(overall_state, "How faithfully does the output follow the system prompt as a whole?", ["ignores most instructions", "follows some instructions", "follows about half", "follows most instructions", "follows every instruction"])
+
+lines = []
+issues = []
+total = 0.0
+for r in reversed(sorted(results)):
+    total += r[0]
+    bad = r[0] >= THRESHOLD
+    # Show the first line of the part as its title, skipping divider lines.
+    title = parts[r[1] - 1].strip("=-_*# \n\t").splitlines()[0][:60]
+    line = ("[BREAK?] " if bad else "[OK]     ") + f"p={r[0]:.2f} part {r[1]}: {title}"
+    lines.append(line)
+    if bad:
+        issues.append(line)
+
+score = round(100 * (1 - total / len(parts))) if parts else 0
+header = f"Adherence: {score}/100 ({len(issues)} of {len(parts)} parts likely broken)"
+if truncated:
+    header += f"\nOnly the first {MAX_PARTS} parts were checked"
+if OVERALL:
+    header += f"\nOverall: {level:.2f} / 4"
+
+ot1 = header + "\n" + "\n".join(lines)
+ot2 = header + "\n" + "\n".join(issues)
+part_texts = []
+for i, part in enumerate(parts):
+    part_texts.append(f"--- part {i + 1} ---\n{part}")
+ot3 = "\n\n".join(part_texts)
+ov1 = score
+ov2 = len(issues)
+```
+
+The resulting `out_text_1` is a report like this:
+
+```text
+Adherence: 74/100 (2 of 19 parts likely broken)
+Overall: 2.90 / 4
+[BREAK?] p=0.78 part 7: Keep the events in the order the user gave them.
+[BREAK?] p=0.61 part 12: Describe the camera only when the user asks for it.
+[OK]     p=0.34 part 1: You are a prompt enhancer for a video model.
+[OK]     p=0.22 part 3: Use the requested duration.
+```
+
+Notes:
+
+- The notes above about `max_jev_calls`, `p`, `in_text_2`, and the TypeSafe API apply here too.
+- A part is cut at the first blank line after `PART_CHARS` characters, so no paragraph is split. Headings and bullets are not interpreted, so this works with any layout, but example sections are not skipped.
+- The report names each part by its first line. Read the full text of a flagged part in `out_text_3` to find the instruction in question.
+- One question covers several instructions, so the result is coarser than the line-by-line script. Lower `PART_CHARS` for smaller parts and more questions.
+- In testing, a system prompt of about 20,000 characters was cut into 19 parts and ran in about 2,200 script steps, well under the step limit.
 
 </details>
 

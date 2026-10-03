@@ -609,9 +609,120 @@ ov2 = len(issues)
 - `in_text_2` には、システムプロンプトのテキストそのもの、または `"system_prompt"` キーを持つ JSON 設定のテキストを渡せます。JSON の `\uXXXX` エスケープは復元しません。
 - `#`、`【`、`[...]` で始まる行は見出しとして扱います。見出しの下では、行頭から始まる行を 1 つのルールとし、字下げされた行は直前のルールに含めます。システムプロンプトがどう分けられたかは `out_text_3` で確認できます。
 - 見出しに `SKIP_HEADINGS` の語を含む節は評価しません。例や思考の手順がルールとして判定されるのを防ぐためです。
-- 評価するのは先頭から `MAX_RULES` 件までです。システムプロンプトが非常に長いと、スクリプトのステップ上限を超えることがあります。
+- 評価するのは先頭から `MAX_RULES` 件までです。システムプロンプトが非常に長いと、スクリプトのステップ上限を超えます。その場合は、下の[長いシステムプロンプトの場合](#長いシステムプロンプトの場合)を参照してください。
 - TypeSafe API を使う場合、システムプロンプト、エンハンサーの出力、ユーザーの依頼文はインターネット経由で送信されます。
 - `out_text_3` と数値出力は必要に応じて使ってください。`out_value_3` は使いません。
+
+#### 長いシステムプロンプトの場合
+
+上のスクリプトはシステムプロンプトを 1 行ずつ評価するため、数百行あるシステムプロンプトでは `Script exceeded step limit` で止まります。
+その場合は、下のスクリプトを使ってください。システムプロンプトを空行の位置で `PART_CHARS` 字程度の部分に区切り、
+出力がその部分の指示を破っていないかを、部分ごとに Jev に尋ねます。入力と出力の接続は同じです。
+
+```python
+# 長いシステムプロンプト向け：エンハンサー出力がシステムプロンプトにどれだけ従っているかを、部分ごとに評価する
+# システムプロンプトを空行の位置で PART_CHARS 字程度の部分に区切り、部分ごとに違反の有無を Jev に聞く
+# （1 行ずつ評価する prompt_rule_check.py がステップ上限を超える長さのシステムプロンプト用）
+# it1: エンハンサーの出力
+# it2: システムプロンプト（テキストそのもの、または "system_prompt" を含む JSON 設定の中身）
+# it3: ユーザー文（任意。指示がユーザー文を参照する場合の判定材料）
+# ot1: レポート（違反の疑いが強い順） / ot2: 違反の疑いがある部分のみ / ot3: 区切った部分の一覧
+# ov1: 準拠スコア (0-100) / ov2: 違反の疑いがある部分の数
+# Jev リクエストは 2 回（全部分で 1 回、総合評価で 1 回。OVERALL = False なら 1 回）。max_jev_calls は 2 以上
+
+PART_CHARS = 1000       # 1 つの部分のおおよその文字数。小さくすると細かく評価する（質問数が増える）
+MAX_PARTS = 60          # これを超える部分は評価しない
+THRESHOLD = 0.5         # 違反確率がこれ以上なら違反とみなす
+OVERALL = True          # システムプロンプト全体に対する総合評価も行う
+
+output = str(it1 or "").strip()
+sp = str(it2 or "")
+user_text = str(it3 or "").strip()
+
+if sp.strip().startswith("{"):
+    k = sp.find('"system_prompt"')
+    if k < 0:
+        raise ValueError("JSON に system_prompt がありません")
+    tail = sp[sp.find('"', sp.find(":", k) + 1) + 1:]
+    tail = tail.replace("\\\\", "\x00").replace('\\"', "\x01")
+    sp = tail[:tail.find('"')].replace("\\n", "\n").replace("\\t", "\t").replace("\x01", '"').replace("\x00", "\\")
+sp = sp.replace("\r\n", "\n").strip()
+
+# PART_CHARS 字を超えた後の最初の空行で区切る（段落の途中では切らない）
+parts = []
+pos = 0
+while pos < len(sp) and len(parts) < MAX_PARTS:
+    end = sp.find("\n\n", pos + PART_CHARS)
+    if end < 0:
+        end = len(sp)
+    parts.append(sp[pos:end].strip())
+    pos = end
+truncated = pos < len(sp)
+
+# 全部分で state を共通にし、部分は質問文に入れる（1 リクエストにまとまる）
+state = {"output": output}
+if user_text:
+    state["user_input"] = user_text
+results = []
+for i, part in enumerate(parts):
+    p = jev.noul(state, "Does the output clearly break any instruction in the part of the system prompt below? Answer no if the instructions do not concern the output, or if judging them needs a reference image or anything else not given here.\nPart of the system prompt:\n" + part)
+    results.append([float(p), i + 1])
+
+# 総合評価はシステムプロンプト全体を state にするので別リクエスト。並べ替えの前に聞いて部分と同時に送る
+if OVERALL:
+    overall_state = {"system_prompt": sp, "output": output}
+    if user_text:
+        overall_state["user_input"] = user_text
+    level = jev.score(overall_state, "How faithfully does the output follow the system prompt as a whole?", ["ignores most instructions", "follows some instructions", "follows about half", "follows most instructions", "follows every instruction"])
+
+lines = []
+issues = []
+total = 0.0
+for r in reversed(sorted(results)):
+    total += r[0]
+    bad = r[0] >= THRESHOLD
+    # 部分の先頭行を見出し代わりに表示する（区切り線だけの行は飛ばす）
+    title = parts[r[1] - 1].strip("=-_*# \n\t").splitlines()[0][:60]
+    line = ("[違反?] " if bad else "[OK]    ") + f"p={r[0]:.2f} 部分{r[1]}: {title}"
+    lines.append(line)
+    if bad:
+        issues.append(line)
+
+score = round(100 * (1 - total / len(parts))) if parts else 0
+header = f"準拠スコア: {score}/100 (部分 {len(parts)} 件中、違反の疑い {len(issues)} 件)"
+if truncated:
+    header += f"\n※部分が {MAX_PARTS} 件を超えたため、以降は未評価"
+if OVERALL:
+    header += f"\n総合評価: {level:.2f} / 4"
+
+ot1 = header + "\n" + "\n".join(lines)
+ot2 = header + "\n" + "\n".join(issues)
+part_texts = []
+for i, part in enumerate(parts):
+    part_texts.append(f"--- 部分{i + 1} ---\n{part}")
+ot3 = "\n\n".join(part_texts)
+ov1 = score
+ov2 = len(issues)
+```
+
+出力される `out_text_1` は、次のようなレポートです。
+
+```text
+準拠スコア: 74/100 (部分 19 件中、違反の疑い 2 件)
+総合評価: 2.90 / 4
+[違反?] p=0.78 部分7: 出来事はユーザーが指定した順序のままにする。
+[違反?] p=0.61 部分12: カメラの動きは、ユーザーが求めたときだけ書く。
+[OK]    p=0.34 部分1: あなたは動画モデル用のプロンプトエンハンサーです。
+[OK]    p=0.22 部分3: 長さはユーザーが指定した秒数にする。
+```
+
+注意：
+
+- `max_jev_calls`、`p`、`in_text_2`、TypeSafe API についての上の注意は、このスクリプトにも当てはまります。
+- 部分は、`PART_CHARS` 字を超えた後の最初の空行で区切るので、段落の途中では切れません。見出しや箇条書きは解釈しないので、どんな書き方のシステムプロンプトでも使えますが、例の節は飛ばしません。
+- レポートは、各部分をその先頭の行で示します。違反と判定された部分の全文は `out_text_3` で読み、どの指示が問題なのかを確認してください。
+- 1 つの質問に複数の指示が含まれるので、1 行ずつ評価するスクリプトより結果は粗くなります。`PART_CHARS` を小さくすると、部分が細かくなり、質問数が増えます。
+- テストでは、約 20,000 字のシステムプロンプトが 19 個の部分に区切られ、約 2,200 ステップで実行できました。ステップ上限には十分収まります。
 
 </details>
 

@@ -7,6 +7,7 @@ All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 - Added an application recipe to `README.md` and `README.ja.md` that checks a prompt enhancer's output against its system prompt with `MultiOutputScript (Jev)`
   - The script splits the system prompt into rules, asks Jev whether the output breaks each one in a single request, and reports a score and the rules that are likely broken
+  - A second script for long system prompts checks the system prompt in parts of about 1,000 characters, staying under the script step limit
 
 
 ## [1.3.2] - 2026-10-03
