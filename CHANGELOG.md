@@ -5,6 +5,11 @@ All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 ## [Unreleased]
 
+- `MultiOutputScript (Jev)` prints `[ComfyUI-ScriptFlow] Jev requests: N, responses: M` to the console after each run, including runs that end with an error
+  - Requests are API requests or local model evaluations; questions answered from the run's cache are not counted
+- Set the `httpx` and `typesafe_sdk` loggers to WARNING when `typesafe-sdk` is installed, removing two INFO lines per TypeSafe API request
+  - The `httpx` logger is shared, so its INFO lines from other custom nodes are hidden as well
+
 
 ## [1.3.1] - 2026-09-29
 

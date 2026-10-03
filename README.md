@@ -168,6 +168,8 @@ Notes:
 - The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
 - A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
 - Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
+- Each run prints `[ComfyUI-ScriptFlow] Jev requests: N, responses: M` to the console; fewer responses than requests means a request failed. Questions answered from the run's cache are not counted.
+- When `typesafe-sdk` is installed, the `httpx` and `typesafe_sdk` loggers are set to WARNING, so per-request INFO lines are not shown. The `httpx` setting also applies to other custom nodes.
 - `MultiOutputScript` never loads a model or makes network requests; `jev` is not available there.
 - This project is independent and not affiliated with TypeSafe AI.
 
