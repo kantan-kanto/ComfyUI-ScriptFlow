@@ -457,6 +457,176 @@ Notes:
 
 </details>
 
+### Check a prompt enhancer's output against its system prompt
+
+<details>
+<summary>Show prompt enhancer rule check recipe</summary>
+
+A prompt enhancer is an LLM that rewrites a short request into a prompt for an image or video model,
+following the rules in its system prompt. This recipe splits that system prompt into rules, asks Jev
+whether the enhancer's output breaks each one, and reports a score and the rules that are likely broken.
+It reads the rules from the system prompt you connect, so it is not tied to one enhancer.
+Paste the script below into the `code` field of `MultiOutputScript (Jev)`.
+
+Recommended workflow:
+
+```text
+enhancer output            -> MultiOutputScript (Jev).in_text_1
+system prompt              -> MultiOutputScript (Jev).in_text_2
+user request (optional)    -> MultiOutputScript (Jev).in_text_3
+MultiOutputScript (Jev)
+  -> out_text_1   report
+  -> out_text_2   likely violations only
+  -> out_text_3   rules extracted from the system prompt
+  -> out_value_1  adherence score (0-100)
+  -> out_value_2  number of likely violations
+```
+
+Paste this code into `MultiOutputScript (Jev).code`:
+
+```python
+# Score how well a prompt enhancer's output follows its system prompt.
+#
+# Input:
+#   it1: the enhancer's output
+#   it2: the system prompt, as plain text or as the text of a JSON config
+#        that has a "system_prompt" key
+#   it3: the user's request (optional; used by rules that refer to it)
+#
+# Output:
+#   ot1: report, most likely violations first
+#   ot2: likely violations only
+#   ot3: the rules extracted from the system prompt
+#   ov1: adherence score (0-100)
+#   ov2: number of likely violations
+#
+# Jev requests: 2 (one for all rules, one for the overall rating),
+# or 1 with OVERALL = False.
+
+MAX_RULES = 40          # rules beyond this are not checked
+THRESHOLD = 0.5         # a rule counts as broken at this probability or above
+SKIP_HEADINGS = ["example", "sample", "thinking", "reasoning", "例", "思考", "手順"]   # sections whose heading has one of these are skipped
+OVERALL = True          # also rate the output against the whole system prompt
+
+def has_any(s, words):
+    for w in words:
+        if w in s:
+            return True
+    return False
+
+output = str(it1 or "").strip()
+sp = str(it2 or "")
+user_text = str(it3 or "").strip()
+
+if sp.strip().startswith("{"):
+    k = sp.find('"system_prompt"')
+    if k < 0:
+        raise ValueError("The JSON has no system_prompt key")
+    tail = sp[sp.find('"', sp.find(":", k) + 1) + 1:]
+    tail = tail.replace("\\\\", "\x00").replace('\\"', "\x01")
+    sp = tail[:tail.find('"')].replace("\\n", "\n").replace("\\t", "\t").replace("\x01", '"').replace("\x00", "\\")
+
+# Under each heading, a line that starts at the left margin is one rule.
+# Indented lines belong to the rule above them.
+rules = []
+heading = ""
+skip = False
+for line in sp.splitlines():
+    s = line.strip()
+    if not s:
+        continue
+    if s[0] in "【#[-":
+        if s[:3] == "---":
+            continue
+        if s[0] != "-" and (s[0] != "[" or s[-1] == "]"):
+            heading = s
+            skip = has_any(s.lower(), SKIP_HEADINGS)
+            continue
+    if skip:
+        continue
+    if rules and line[:1] in " \t　":
+        rules[-1][1] = rules[-1][1] + "\n" + s
+    else:
+        rules.append([heading, s])
+
+truncated = len(rules) > MAX_RULES
+rules = rules[:MAX_RULES]
+
+# Every rule shares one state and goes in the question text,
+# so all rules are asked in one request.
+state = {"output": output}
+if user_text:
+    state["user_input"] = user_text
+results = []
+for r in rules:
+    q = "Does the output clearly break the instruction below? Answer no if the instruction does not concern the output, or if judging it needs a reference image or anything else not given here."
+    if r[0]:
+        q += "\nSection: " + r[0]
+    p = jev.noul(state, q + "\nInstruction: " + r[1])
+    results.append([float(p), r[0], r[1]])
+
+# The overall rating needs the whole system prompt as state, so it is a second request.
+# Asking it before the sort below sends it together with the rules.
+if OVERALL:
+    overall_state = {"system_prompt": sp, "output": output}
+    if user_text:
+        overall_state["user_input"] = user_text
+    level = jev.score(overall_state, "How faithfully does the output follow the system prompt as a whole?", ["ignores most instructions", "follows some instructions", "follows about half", "follows most instructions", "follows every instruction"])
+
+ranked = list(reversed(sorted(results)))
+lines = []
+issues = []
+total = 0.0
+for r in ranked:
+    total += r[0]
+    bad = r[0] >= THRESHOLD
+    line = ("[BREAK?] " if bad else "[OK]     ") + f"p={r[0]:.2f} {r[1]} " + r[2].splitlines()[0][:70]
+    lines.append(line)
+    if bad:
+        issues.append(line)
+
+score = round(100 * (1 - total / len(ranked))) if ranked else 0
+header = f"Adherence: {score}/100 ({len(issues)} of {len(ranked)} rules likely broken)"
+if truncated:
+    header += f"\nOnly the first {MAX_RULES} rules were checked"
+if OVERALL:
+    header += f"\nOverall: {level:.2f} / 4"
+
+ot1 = header + "\n" + "\n".join(lines)
+ot2 = header + "\n" + "\n".join(issues)
+rule_lines = []
+for i, r in enumerate(rules):
+    rule_lines.append(f"{i + 1}. {r[0]} {r[1]}")
+ot3 = "\n\n".join(rule_lines)
+ov1 = score
+ov2 = len(issues)
+```
+
+The resulting `out_text_1` is a report like this:
+
+```text
+Adherence: 71/100 (1 of 4 rules likely broken)
+Overall: 3.10 / 4
+[BREAK?] p=0.74 ## Output format - Do not write sentences.
+[OK]     p=0.21  You are a prompt enhancer for SDXL.
+[OK]     p=0.12 ## Output format - Start with "masterpiece, best quality".
+[OK]     p=0.09 ## Output format - Output a single line of comma-separated tags.
+```
+
+Notes:
+
+- Requires v1.3.2 or later, where questions about the same `state` share one request. The script makes 2 requests, so set `max_jev_calls` to 2 or more.
+- `p` is Jev's probability that the output breaks the rule. It is a judgment, not a check: in testing it flagged some rules that were followed and missed some that were broken, and values near `THRESHOLD` changed between runs. Treat the flagged rules as candidates to review.
+- A rule that needs something the script does not have, such as a reference image, cannot be judged. Connect the user request to `in_text_3` for rules that refer to it.
+- `in_text_2` takes the system prompt as plain text, or the text of a JSON config with a `"system_prompt"` key. `\uXXXX` escapes in the JSON are not decoded.
+- Lines starting with `#`, `【`, or `[...]` are headings. Under a heading, each line at the left margin is one rule, and indented lines belong to the rule above. Check `out_text_3` to see how your system prompt was split.
+- Sections whose heading contains a word in `SKIP_HEADINGS` are skipped, so examples and thinking steps are not judged as rules.
+- Only the first `MAX_RULES` rules are checked. A very long system prompt can exceed the script step limit.
+- With the TypeSafe API, the system prompt, the enhancer output, and the user request are sent over the internet.
+- `out_text_3` and the numeric outputs are optional; `out_value_3` is unused.
+
+</details>
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0**.

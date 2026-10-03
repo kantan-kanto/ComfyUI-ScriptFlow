@@ -459,6 +459,162 @@ ot1 = (
 
 </details>
 
+### プロンプトエンハンサーの出力をシステムプロンプトと照らし合わせる
+
+<details>
+<summary>プロンプトエンハンサーのルール確認レシピを表示</summary>
+
+プロンプトエンハンサーは、短い依頼文を、システムプロンプトのルールに従って画像・動画モデル用のプロンプトに書き直す LLM です。
+このレシピは、そのシステムプロンプトをルールに分け、エンハンサーの出力が各ルールを破っていないかを Jev に尋ねて、
+スコアと、破っている疑いのあるルールを出力します。ルールは接続したシステムプロンプトから読み取るので、特定のエンハンサーに依存しません。
+下のスクリプトを `MultiOutputScript (Jev)` の `code` 欄に貼り付けてください。
+
+推奨するワークフロー：
+
+```text
+enhancer output            -> MultiOutputScript (Jev).in_text_1
+system prompt              -> MultiOutputScript (Jev).in_text_2
+user request (optional)    -> MultiOutputScript (Jev).in_text_3
+MultiOutputScript (Jev)
+  -> out_text_1   report
+  -> out_text_2   likely violations only
+  -> out_text_3   rules extracted from the system prompt
+  -> out_value_1  adherence score (0-100)
+  -> out_value_2  number of likely violations
+```
+
+次のコードを `MultiOutputScript (Jev).code` に貼り付けます。
+
+```python
+# エンハンサー出力がシステムプロンプトにどれだけ従っているかを評価する（モデル非依存）
+# it1: エンハンサーの出力
+# it2: システムプロンプト（テキストそのもの、または "system_prompt" を含む JSON 設定の中身）
+# it3: ユーザー文（任意。ルールがユーザー文を参照する場合の判定材料）
+# ot1: レポート（違反の疑いが強い順） / ot2: 違反の疑いがあるルールのみ / ot3: 抽出したルール一覧
+# ov1: 準拠スコア (0-100) / ov2: 違反の疑いがあるルール数
+# Jev リクエストは 2 回（全ルールで 1 回、総合評価で 1 回。OVERALL = False なら 1 回）。max_jev_calls は 2 以上
+
+MAX_RULES = 40          # これを超えるルールは評価しない
+THRESHOLD = 0.5         # 違反確率がこれ以上なら違反とみなす
+SKIP_HEADINGS = ["例", "example", "sample", "思考", "手順", "thinking", "reasoning"]   # この語を含む見出しの節は評価しない
+OVERALL = True          # システムプロンプト全体に対する総合評価も行う
+
+def has_any(s, words):
+    for w in words:
+        if w in s:
+            return True
+    return False
+
+output = str(it1 or "").strip()
+sp = str(it2 or "")
+user_text = str(it3 or "").strip()
+
+if sp.strip().startswith("{"):
+    k = sp.find('"system_prompt"')
+    if k < 0:
+        raise ValueError("JSON に system_prompt がありません")
+    tail = sp[sp.find('"', sp.find(":", k) + 1) + 1:]
+    tail = tail.replace("\\\\", "\x00").replace('\\"', "\x01")
+    sp = tail[:tail.find('"')].replace("\\n", "\n").replace("\\t", "\t").replace("\x01", '"').replace("\x00", "\\")
+
+# 見出しごとに、行頭の項目または段落を1ルールとし、字下げされた行は直前のルールに含める
+rules = []
+heading = ""
+skip = False
+for line in sp.splitlines():
+    s = line.strip()
+    if not s:
+        continue
+    if s[0] in "【#[-":
+        if s[:3] == "---":
+            continue
+        if s[0] != "-" and (s[0] != "[" or s[-1] == "]"):
+            heading = s
+            skip = has_any(s.lower(), SKIP_HEADINGS)
+            continue
+    if skip:
+        continue
+    if rules and line[:1] in " \t　":
+        rules[-1][1] = rules[-1][1] + "\n" + s
+    else:
+        rules.append([heading, s])
+
+truncated = len(rules) > MAX_RULES
+rules = rules[:MAX_RULES]
+
+# 全ルールで state を共通にし、ルールは質問文に入れる（1 リクエストにまとまる）
+state = {"output": output}
+if user_text:
+    state["user_input"] = user_text
+results = []
+for r in rules:
+    q = "Does the output clearly break the instruction below? Answer no if the instruction does not concern the output, or if judging it needs a reference image or anything else not given here."
+    if r[0]:
+        q += "\nSection: " + r[0]
+    p = jev.noul(state, q + "\nInstruction: " + r[1])
+    results.append([float(p), r[0], r[1]])
+
+# 総合評価はシステムプロンプト全体を state にするので別リクエスト。並べ替えの前に聞いてルールと同時に送る
+if OVERALL:
+    overall_state = {"system_prompt": sp, "output": output}
+    if user_text:
+        overall_state["user_input"] = user_text
+    level = jev.score(overall_state, "How faithfully does the output follow the system prompt as a whole?", ["ignores most instructions", "follows some instructions", "follows about half", "follows most instructions", "follows every instruction"])
+
+ranked = list(reversed(sorted(results)))
+lines = []
+issues = []
+total = 0.0
+for r in ranked:
+    total += r[0]
+    bad = r[0] >= THRESHOLD
+    line = ("[違反?] " if bad else "[OK]    ") + f"p={r[0]:.2f} {r[1]} " + r[2].splitlines()[0][:70]
+    lines.append(line)
+    if bad:
+        issues.append(line)
+
+score = round(100 * (1 - total / len(ranked))) if ranked else 0
+header = f"準拠スコア: {score}/100 (ルール {len(ranked)} 件中、違反の疑い {len(issues)} 件)"
+if truncated:
+    header += f"\n※ルールが {MAX_RULES} 件を超えたため、以降は未評価"
+if OVERALL:
+    header += f"\n総合評価: {level:.2f} / 4"
+
+ot1 = header + "\n" + "\n".join(lines)
+ot2 = header + "\n" + "\n".join(issues)
+rule_lines = []
+for i, r in enumerate(rules):
+    rule_lines.append(f"{i + 1}. {r[0]} {r[1]}")
+ot3 = "\n\n".join(rule_lines)
+ov1 = score
+ov2 = len(issues)
+```
+
+出力される `out_text_1` は、次のようなレポートです。
+
+```text
+準拠スコア: 71/100 (ルール 4 件中、違反の疑い 1 件)
+総合評価: 3.10 / 4
+[違反?] p=0.74 ## 出力形式 - 文章は書かない。
+[OK]    p=0.21  あなたは SDXL 用のプロンプトエンハンサーです。
+[OK]    p=0.12 ## 出力形式 - 先頭は「masterpiece, best quality」にする。
+[OK]    p=0.09 ## 出力形式 - カンマ区切りのタグを 1 行で出力する。
+```
+
+注意：
+
+- v1.3.2 以降が必要です。v1.3.2 以降では、同じ `state` についての質問を 1 回のリクエストにまとめて送ります。このスクリプトのリクエストは 2 回なので、`max_jev_calls` は 2 以上にしてください。
+- `p` は、出力がそのルールを破っていると Jev が判断した確率です。確実な検査ではありません。テストでは、守られているルールを違反と判定することも、破られているルールを見逃すこともあり、`THRESHOLD` 付近の値は実行のたびに変わりました。違反と判定されたルールは、確認すべき候補として扱ってください。
+- 参照画像のように、スクリプトに渡していない情報が必要なルールは判定できません。ユーザーの依頼文に関するルールを判定するには、依頼文を `in_text_3` につないでください。
+- `in_text_2` には、システムプロンプトのテキストそのもの、または `"system_prompt"` キーを持つ JSON 設定のテキストを渡せます。JSON の `\uXXXX` エスケープは復元しません。
+- `#`、`【`、`[...]` で始まる行は見出しとして扱います。見出しの下では、行頭から始まる行を 1 つのルールとし、字下げされた行は直前のルールに含めます。システムプロンプトがどう分けられたかは `out_text_3` で確認できます。
+- 見出しに `SKIP_HEADINGS` の語を含む節は評価しません。例や思考の手順がルールとして判定されるのを防ぐためです。
+- 評価するのは先頭から `MAX_RULES` 件までです。システムプロンプトが非常に長いと、スクリプトのステップ上限を超えることがあります。
+- TypeSafe API を使う場合、システムプロンプト、エンハンサーの出力、ユーザーの依頼文はインターネット経由で送信されます。
+- `out_text_3` と数値出力は必要に応じて使ってください。`out_value_3` は使いません。
+
+</details>
+
 ## ライセンス
 
 このプロジェクトは **GNU General Public License v3.0** の下でライセンスされています。
