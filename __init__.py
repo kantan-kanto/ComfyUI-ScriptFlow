@@ -926,14 +926,21 @@ class MultiOutputScriptJev(MultiOutputScript):
         inputs = (in_text_1, in_text_2, in_text_3, in_value_1, in_value_2, in_value_3)
         if model == _TYPESAFE_API:
             with _typesafe_client() as client:
-                return _run_script(code, JevBackend(TypeSafeJev(client), max_jev_calls), *inputs)
+                return _run_jev_script(code, JevBackend(TypeSafeJev(client), max_jev_calls), inputs)
         model_path = list_local_models().get(model)
         if model_path is None:
             raise ValueError(f"GGUF model not found under models/LLM or models/text_encoders: {model}")
         try:
-            return _run_script(code, JevBackend(LocalJev(model_path), max_jev_calls), *inputs)
+            return _run_jev_script(code, JevBackend(LocalJev(model_path), max_jev_calls), inputs)
         finally:
             unload_local_model()
+
+
+def _run_jev_script(code: str, jev: JevBackend, inputs: tuple):
+    try:
+        return _run_script(code, jev, *inputs)
+    finally:
+        print(f"[ComfyUI-ScriptFlow] Jev requests: {jev.calls}, responses: {jev.responses}")
 
 
 def _typesafe_client() -> Any:

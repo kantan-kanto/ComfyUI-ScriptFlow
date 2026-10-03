@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gc
 import json
+import logging
 import os
 from typing import Any
 
@@ -36,6 +37,9 @@ except ImportError:
 
 try:
     from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+    # One INFO line pair per request floods the console; the run summary is printed instead.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("typesafe_sdk").setLevel(logging.WARNING)
 except ImportError:
     TypeSafeClient = None
 
@@ -57,6 +61,7 @@ class JevBackend:
         self.engine = engine
         self.max_calls = max_calls
         self.calls = 0
+        self.responses = 0
         self.cache: dict[str, Any] = {}
 
     def noul(self, state: Any, question: Any) -> float:
@@ -83,6 +88,7 @@ class JevBackend:
             raise RuntimeError(f"Script exceeded max_jev_calls ({self.max_calls})")
         self.calls += 1
         probabilities = self.engine.ask(state, kind, question, criteria)
+        self.responses += 1
         self.cache[key] = probabilities
         return probabilities
 
