@@ -17,11 +17,13 @@ from typing import Any, Dict
 
 from .jev_backend import (
     UNANSWERED,
+    ClefJev,
     JevBackend,
     LocalJev,
     NeedAnswers,
     TypeSafeClient,
     TypeSafeJev,
+    is_clef_model,
     list_local_models,
     unload_local_model,
 )
@@ -941,8 +943,9 @@ class MultiOutputScriptJev(MultiOutputScript):
         model_path = list_local_models().get(model)
         if model_path is None:
             raise ValueError(f"GGUF model not found under models/LLM or models/text_encoders: {model}")
+        engine = ClefJev(model_path) if is_clef_model(model_path) else LocalJev(model_path)
         try:
-            return _run_jev_script(code, JevBackend(LocalJev(model_path), max_jev_calls, False), inputs)
+            return _run_jev_script(code, JevBackend(engine, max_jev_calls, False), inputs)
         finally:
             unload_local_model()
 

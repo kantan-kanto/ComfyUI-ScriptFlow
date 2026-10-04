@@ -11,10 +11,12 @@
 
 from __future__ import annotations
 
+import ctypes
 import gc
 import json
 import logging
 import os
+import struct
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -23,6 +25,9 @@ import folder_paths
 import numpy as np
 
 try:
+    # The Clef path reads its newer functions from this module at call time,
+    # so llama-cpp-python builds without them still serve the other local models.
+    import llama_cpp.llama_cpp as llama_lib
     from llama_cpp import (
         Llama,
         llama_batch_free,
@@ -51,6 +56,28 @@ _DIRECT_SYSTEM = (
     "Respond with only its uppercase letter, with no explanation or reasoning."
 )
 _N_CTX = 8192
+
+# Clef (Cloudflare's decision model) prompt, as in joint_schema_model.py of Cloudflare/clef-flash (Apache-2.0)
+# and the "systemone" template of its GGUF.
+_CLEF_SYSTEM = (
+    "Read the complete state and schema. Decide every field jointly. "
+    "Each answer must be exactly one of that field's allowed options."
+)
+_CLEF_NOUL_OPTIONS = [
+    ("true", "The proposition is true or the answer is yes."),
+    ("false", "The proposition is false or the answer is no."),
+]
+# enum llama_decision_order: which tokens the decision head reads as a question of each type, or as an option
+_CLEF_ORDER_QUESTION = {"noul": 1, "choice": 2, "score": 3}
+_CLEF_ORDER_OPTION = 4
+# llama_batch_ext_set_decision_order is exported with C++ linkage: MSVC name, then Itanium (macOS, Linux)
+_CLEF_SET_ORDER_SYMBOLS = (
+    "?llama_batch_ext_set_decision_order@@YA_NPEAUllama_batch_ext@@HW4llama_decision_order@@@Z",
+    "__Z34llama_batch_ext_set_decision_orderP15llama_batch_exti20llama_decision_order",
+    "_Z34llama_batch_ext_set_decision_orderP15llama_batch_exti20llama_decision_order",
+)
+_LLAMA_PROCESS_TYPE_DECODE = 1
+_GGUF_TYPE_STRING = 8
 
 _loaded_model: tuple[str, Any, Any] | None = None
 
@@ -175,6 +202,109 @@ class LocalJev:
         return answers
 
 
+class ClefJev:
+    """Answers with a local Clef GGUF: every question about one state in one forward pass.
+
+    The model's joint decision head scores each option of each question; no text is generated.
+    """
+
+    def __init__(self, model_path: str):
+        self.model_path = model_path
+
+    def ask(self, state: Any, questions: list[tuple]) -> list[list[float]]:
+        llm = load_clef_model(self.model_path)
+        options = [_clef_options(kind, criteria) for kind, _, criteria in questions]
+
+        # The pieces are tokenized one by one, as in training.
+        tokens: list[int] = []
+        orders: list[int] = []
+
+        def add(text: str, order: int = 0) -> None:
+            piece = llm.tokenize(text.encode("utf-8"), add_bos=False, special=True)
+            tokens.extend(piece)
+            orders.extend([order] * len(piece))
+
+        add(f"<|im_start|>system\n{_CLEF_SYSTEM}<|im_end|>\n<|im_start|>user\nSTATE:\n")
+        add(_clef_render(state))
+        add("\n\nSCHEMA FIELDS:\n")
+        for i, (kind, question, _) in enumerate(questions):
+            add(f"\nFIELD {i + 1}\nID: q{i}\nTYPE: {kind}\nINSTRUCTION: ")
+            add(_clef_render(question), _CLEF_ORDER_QUESTION[kind])
+            add("\nALLOWED OPTIONS:\n")
+            for j, (key, description) in enumerate(options[i]):
+                add(f"OPTION {j + 1}: ")
+                semantics = {"option_id": key}
+                if description is not None:
+                    semantics["description"] = description
+                add(_clef_render(semantics), _CLEF_ORDER_OPTION)
+                add("\n")
+            add("END FIELD\n")
+        add("\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nJOINT SCHEMA DECISIONS:")
+        if len(tokens) > llm.n_ctx():
+            raise ValueError(f"Jev prompt is {len(tokens)} tokens, over the {llm.n_ctx()} token context")
+
+        set_order = _clef_set_order_function()
+        llama_memory_clear(llama_get_memory(llm.ctx), True)
+        batch = llama_lib.llama_batch_ext_init(llm.ctx)
+        try:
+            for index, (token, order) in enumerate(zip(tokens, orders)):
+                llama_lib.llama_batch_ext_add_token(batch, 0, token)
+                llama_lib.llama_batch_ext_set_pos(batch, index, ctypes.byref(llama_lib.llama_pos(index)))
+                llama_lib.llama_batch_ext_set_output_embd(batch, index, True)
+                if order:
+                    set_order(batch, index, order)
+            if llama_lib.llama_process(llm.ctx, _LLAMA_PROCESS_TYPE_DECODE, batch) != 0:
+                raise RuntimeError("llama_process failed for the Jev prompt")
+        finally:
+            llama_lib.llama_batch_ext_free(batch)
+
+        # Row i of the embeddings output holds the score of option i, counted across the questions.
+        results = []
+        row = 0
+        for (kind, _, criteria), question_options in zip(questions, options):
+            scores = np.array(
+                [llama_lib.llama_get_embeddings_ith(llm.ctx, row + i)[0] for i in range(len(question_options))],
+                dtype=np.float64,
+            )
+            row += len(question_options)
+            if np.isnan(scores).any():
+                raise RuntimeError("The Clef model could not evaluate the questions")
+            weights = np.exp(scores - scores.max())
+            probabilities = dict(zip((key for key, _ in question_options), (weights / weights.sum()).tolist()))
+            if kind == "choice":
+                # Clef takes the options sorted by label; answer in the order they were given.
+                results.append([probabilities[str(label)] for label in criteria])
+            else:
+                results.append(list(probabilities.values()))
+        return results
+
+
+def _clef_render(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _clef_options(kind: str, criteria: Any) -> list[tuple[str, Any]]:
+    if kind == "noul":
+        return _CLEF_NOUL_OPTIONS
+    if kind == "choice":
+        return sorted((str(label), description) for label, description in criteria.items())
+    return [(str(level), description) for level, description in enumerate(criteria)]
+
+
+def _clef_set_order_function() -> Any:
+    for symbol in _CLEF_SET_ORDER_SYMBOLS:
+        try:
+            function = getattr(llama_lib._lib, symbol)
+        except AttributeError:
+            continue
+        function.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_int]
+        function.restype = ctypes.c_bool
+        return function
+    raise RuntimeError("This llama-cpp-python build cannot run Clef models. See the README for the required version.")
+
+
 class TypeSafeJev:
     """Answers with TypeSafe's Jev API, all questions about one state in one request.
 
@@ -287,17 +417,45 @@ def _display_name(path: str) -> str:
     return path if rel.startswith("..") else rel.replace("\\", "/")
 
 
-def load_local_model(model_path: str) -> tuple[Any, Any]:
-    global _loaded_model
-    if _loaded_model is not None and _loaded_model[0] == model_path:
-        return _loaded_model[1], _loaded_model[2]
+def is_clef_model(model_path: str) -> bool:
+    """Reads general.architecture, which GGUF writers store as the first metadata entry."""
+    with open(model_path, "rb") as f:
+        # magic, version, tensor count, metadata count, then the first key: length and bytes
+        header = f.read(32)
+        if len(header) < 32 or header[:4] != b"GGUF":
+            return False
+        key_length = struct.unpack("<Q", header[24:])[0]
+        if key_length != len(b"general.architecture") or f.read(key_length) != b"general.architecture":
+            return False
+        value_type, value_length = struct.unpack("<IQ", f.read(12))
+        return value_type == _GGUF_TYPE_STRING and value_length == len(b"clef") and f.read(value_length) == b"clef"
+
+
+def _open_model(model_path: str, **kwargs: Any) -> Any:
     if Llama is None:
         raise RuntimeError("llama-cpp-python is not installed. See the README for installation.")
     unload_local_model()
     device = comfy.model_management.get_torch_device()
     comfy.model_management.free_memory(os.path.getsize(model_path) * 1.2, device)
-    # n_batch = n_ctx so one llama_decode call can take the whole prompt
-    llm = Llama(model_path=model_path, n_ctx=_N_CTX, n_batch=_N_CTX, n_gpu_layers=-1, verbose=False)
+    # n_batch = n_ctx so one decode call can take the whole prompt
+    return Llama(model_path=model_path, n_ctx=_N_CTX, n_batch=_N_CTX, n_gpu_layers=-1, verbose=False, **kwargs)
+
+
+def load_clef_model(model_path: str) -> Any:
+    global _loaded_model
+    if _loaded_model is not None and _loaded_model[0] == model_path:
+        return _loaded_model[1]
+    # The decision head reads the whole prompt in one physical batch, and its scores come out as embeddings.
+    llm = _open_model(model_path, n_ubatch=_N_CTX, embeddings=True)
+    _loaded_model = (model_path, llm, None)
+    return llm
+
+
+def load_local_model(model_path: str) -> tuple[Any, Any]:
+    global _loaded_model
+    if _loaded_model is not None and _loaded_model[0] == model_path:
+        return _loaded_model[1], _loaded_model[2]
+    llm = _open_model(model_path)
     template = llm.metadata.get("tokenizer.chat_template")
     if not template:
         llm.close()
