@@ -3,7 +3,7 @@
 
 ---
 
-**Version:** 1.3.2
+**Version:** 1.3.3
 **License:** GPL-3.0
 
 System One の判断モデルを使える、安全な Python 風スクリプトノードです。
@@ -55,6 +55,7 @@ System One モデルはテキストを生成せず、1 回の高速な処理で�
 
 - ComfyUI を実行している Python 環境に [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) をインストールします。JamePeng 版と、本家の [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35 で動作を確認しています。
 - 指示追従型（instruction-tuned）の GGUF モデルを `ComfyUI/models/LLM`（または `models/text_encoders`）に置きます。GGUF にはチャットテンプレート（`tokenizer.chat_template` メタデータ）が含まれている必要があります。ほとんどの指示追従型 GGUF には含まれています。Qwen3.5-9B Q8_0 と Gemma-4-E4B Q8 で動作を確認しています。
+- Cloudflare のオープンウェイトの判断モデル [Clef](https://huggingface.co/Cloudflare/clef-flash) を使う場合は、llama.cpp ネイティブ形式の Clef の GGUF（[ggml-org/Clef-Flash-GGUF](https://huggingface.co/ggml-org/Clef-Flash-GGUF) など）を同じフォルダに置きます。JamePeng 版の llama-cpp-python 0.4.2 以降が必要です。通常のチャットモデルとして変換された Clef の GGUF は汎用モデルとして扱われ、Clef の判断ヘッドは使われません。Windows（Intel Arc、SYCL ビルド）の Clef-Flash Q8_0 で動作を確認しています。Linux と macOS では未確認です。
 
 ## 主な機能
 - 複数の入力：数値とテキストの入力を自由に組み合わせられます。
@@ -124,8 +125,9 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 
 - **TypeSafe API**（基本）：質問をインターネット経由で Jev に送ります。
 - **ローカル GGUF モデル**（フォールバック）：Jev API を使えない場合や、テキストを手元のマシンから出したくない場合に使います。汎用の指示追従型モデルで Jev 風の判断を近似するもので、[SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev) の方式に従い、文字を割り当てた選択肢の次トークン確率を 1 回の順伝播で読み取ります。テキストは生成せず、ネットワークにも何も送りません。答えや確率は Jev とは異なります。
+- **ローカルの Clef モデル**：[Clef](https://huggingface.co/Cloudflare/clef-flash) は、Jev と同じ種類の質問に答えるオープンウェイトの判断モデルです。GGUF のメタデータ `general.architecture` が `clef` のモデルを、Clef として扱います。Clef の GGUF を選ぶと、上の近似の代わりにモデルの判断ヘッドを使い、同じ `state` についての質問すべてに 1 回の順伝播で答えます。`state` と質問を Clef の入力書式に並べ、判断ヘッドが出す選択肢ごとのスコアを、質問ごとに softmax で確率にします。文章は生成せず、ネットワークにも何も送信しません。答えと確率は Jev とは異なります。
 
-スクリプトはどちらでも同じです。各バックエンドのセットアップは[インストール](#インストール)を参照してください。
+スクリプトはどれでも同じです。各バックエンドのセットアップは[インストール](#インストール)を参照してください。
 
 追加の入力：
 - `model`：`TypeSafe API`、またはローカルの GGUF モデル（`mmproj-*` ファイルは表示されません）。
@@ -134,9 +136,9 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 関数（`state` は文字列・辞書・リスト。テキストのみ）：
 - `jev.yes(state, question[, threshold])` → `bool`（Yes の確率が `threshold` 以上か。初期値 `0.5`）
 - `jev.noul(state, question)` → Yes の確率（`0.0`〜`1.0`）。しきい値と比較して使ってください。そのまま条件に使うとエラーになります。
-- `jev.choice(state, question, options)` → 最も確からしい選択肢（`str`）。`options` はラベルのリスト、またはラベルから説明への辞書です（ローカルモデルでは 2〜16 個）。
+- `jev.choice(state, question, options)` → 最も確からしい選択肢（`str`）。`options` はラベルのリスト、またはラベルから説明への辞書です（汎用のローカルモデルでは 2〜16 個）。
 - `jev.probabilities(state, question, options)` → 各選択肢とその確率の `dict`（合計 `1.0`）。`options` は `jev.choice` と同じです。同じ引数で両方を呼んでも、問い合わせは 1 回です。
-- `jev.score(state, question, levels)` → 順序付きの段階の説明に対する期待値（`float`、`0`〜`len(levels) - 1`）（ローカルモデルでは 2〜16 段階）
+- `jev.score(state, question, levels)` → 順序付きの段階の説明に対する期待値（`float`、`0`〜`len(levels) - 1`）（汎用のローカルモデルでは 2〜16 段階）
 
 ```python
 # it1: a prompt text
@@ -195,8 +197,9 @@ client.system_one(state=it1, questions={"q0": Noul(instructions="q1"), "q1": Nou
 
 注意：
 - TypeSafe API は `state` と質問をインターネット経由で送信します。外部に出せないテキストには使わないでください。
-- ローカルモデルの質問は 1 回の順伝播で処理されます（GPU 上の 4B〜9B モデルで約 1〜1.5 秒）。モデルは実行ごとに最初の質問で読み込まれ（数秒）、実行が終わるとアンロードされて、ワークフローの残りのために VRAM を解放します。
+- 汎用のローカルモデルは、質問 1 つにつき 1 回の順伝播で処理します（GPU 上の 4B〜9B モデルで約 1〜1.5 秒）。Clef モデルは、1 回のリクエストに含まれる質問すべてを 1 回の順伝播で処理します（Intel Arc の内蔵 GPU 上の Clef-Flash Q8_0 で、300 トークンのリクエストが約 3 秒）。モデルは実行ごとに最初の質問で読み込まれ（数秒）、実行が終わるとアンロードされて、ワークフローの残りのために VRAM を解放します。
 - ローカルモデルの確率は較正されておらず、モデルによって変わります。しきい値は実際の入力で試して決めてください。
+- ローカルモデルのプロンプトは 8,192 トークンまでです。汎用モデルでは `state` と質問 1 つ、Clef では `state` と 1 回のリクエストの質問すべてがこの範囲に収まる必要があります。Clef はテキストのみに対応しています。
 - 実行ごとにコンソールへ `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` を出力します。送ったリクエスト数、異なる `state` の数、質問数、返信があったリクエスト数です。返信数がリクエスト数より少なければ、途中のリクエストが失敗しています。同じ実行のキャッシュから答えた質問は数えません。
 - `typesafe-sdk` がインストールされていると、`httpx2`（SDK が使う HTTP クライアント）と `typesafe_sdk` のロガーを WARNING に設定するため、リクエストごとの INFO ログは表示されません。
 - `MultiOutputScript` はモデルを読み込まず、ネットワークにもアクセスしません。`jev` は使えません。
@@ -605,6 +608,7 @@ ov2 = len(issues)
 
 - v1.3.2 以降が必要です。v1.3.2 以降では、同じ `state` についての質問を 1 回のリクエストにまとめて送ります。このスクリプトのリクエストは 2 回なので、`max_jev_calls` は 2 以上にしてください。
 - `p` は、出力がそのルールを破っていると Jev が判断した確率です。確実な検査ではありません。テストでは、守られているルールを違反と判定することも、破られているルールを見逃すこともあり、`THRESHOLD` 付近の値は実行のたびに変わりました。違反と判定されたルールは、確認すべき候補として扱ってください。
+- このレシピは、TypeSafe API の Jev で作成しました。テストでは、ローカルの Clef-Flash モデルは、出力が守っているルールも含めて大半のルールを違反と判定したため、このレシピには向きません。
 - 参照画像のように、スクリプトに渡していない情報が必要なルールは判定できません。ユーザーの依頼文に関するルールを判定するには、依頼文を `in_text_3` につないでください。
 - `in_text_2` には、システムプロンプトのテキストそのもの、または `"system_prompt"` キーを持つ JSON 設定のテキストを渡せます。JSON の `\uXXXX` エスケープは復元しません。
 - `#`、`【`、`[...]` で始まる行は見出しとして扱います。見出しの下では、行頭から始まる行を 1 つのルールとし、字下げされた行は直前のルールに含めます。システムプロンプトがどう分けられたかは `out_text_3` で確認できます。
@@ -751,9 +755,6 @@ You should have received a copy of the GNU General Public License along with thi
 
 詳しいバージョン履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
-### 現在のバージョン：1.3.2
-- `MultiOutputScript (Jev)` がスクリプトを変えずに質問をまとめて送るように：同じ `state` の質問は 1 回のリクエストで送り、`state` が違うリクエストは同時に送る
-- `max_jev_calls` が質問数ではなくリクエスト数を制限するように
-- 実行ごとに Jev のリクエスト数、`state` 数、質問数、返信数をコンソールに出力
-- TypeSafe SDK と HTTP クライアントのリクエストごとの INFO ログを非表示に
-- `datetime.datetime.now()` と `datetime.date.today()` が実行を開始した時刻を返すように
+### 現在のバージョン：1.3.3
+- `MultiOutputScript (Jev)` が、ローカルの Clef の GGUF モデル（Cloudflare のオープンウェイトの判断モデル）をモデルの判断ヘッドで動かせるように。同じ `state` についての質問すべてに 1 回の順伝播で答える
+- プロンプトエンハンサーの出力をシステムプロンプトと照らし合わせる応用レシピを追加。長いシステムプロンプト用の 2 つめのスクリプトも含む

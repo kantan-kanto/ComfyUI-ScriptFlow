@@ -1,7 +1,7 @@
 # ComfyUI-ScriptFlow
 [en | [ja](README.ja.md)]
 
-**Version:** 1.3.2
+**Version:** 1.3.3
 **License:** GPL-3.0
 
 Safe Python-like script node for ComfyUI with a System One decision model.
@@ -53,6 +53,7 @@ The `MultiOutputScript` and `centi` nodes need no extra packages. `MultiOutputSc
 
 - Install [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) in the Python environment that runs ComfyUI. Tested with the JamePeng fork and the upstream [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35.
 - Put an instruction-tuned GGUF model in `ComfyUI/models/LLM` (or `models/text_encoders`). The GGUF must include a chat template (`tokenizer.chat_template` metadata), as most instruction-tuned GGUFs do. Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
+- To use [Clef](https://huggingface.co/Cloudflare/clef-flash), Cloudflare's open-weight decision model, put a Clef GGUF in the llama.cpp native format, such as [ggml-org/Clef-Flash-GGUF](https://huggingface.co/ggml-org/Clef-Flash-GGUF), in the same folder. It needs the JamePeng fork of llama-cpp-python 0.4.2 or later. A Clef GGUF converted as an ordinary chat model is treated as a general model and does not use Clef's decision head. Tested with Clef-Flash Q8_0 on Windows (Intel Arc, SYCL build); Linux and macOS are untested.
 
 ## Key Features
 - Multiple inputs: freely combine numeric and text inputs.
@@ -122,8 +123,9 @@ Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` name
 
 - **TypeSafe API** (primary): sends the questions to Jev over the internet.
 - **Local GGUF model** (fallback): for when the Jev API is not available, or when text must stay on your machine. It approximates Jev-style decisions with a general instruction-tuned model, reading the answer from next-token probabilities of lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network. Answers and probabilities differ from Jev's.
+- **Local Clef model**: [Clef](https://huggingface.co/Cloudflare/clef-flash) is an open-weight decision model with the same question types as Jev. A GGUF whose `general.architecture` metadata is `clef` is treated as a Clef model. Selecting one uses the model's decision head instead of the approximation above, and answers every question about one `state` in one forward pass: the `state` and the questions are laid out in Clef's input format, and the score the decision head gives each option is turned into probabilities with a softmax per question. No text is generated and nothing is sent over the network. Answers and probabilities differ from Jev's.
 
-Scripts are the same for both. See [Installation](#installation) for the setup of each backend.
+Scripts are the same for all of them. See [Installation](#installation) for the setup of each backend.
 
 Extra inputs:
 - `model`: `TypeSafe API`, or a local GGUF model (`mmproj-*` files are hidden).
@@ -132,9 +134,9 @@ Extra inputs:
 Functions (`state` is a string, dict, or list; text only):
 - `jev.yes(state, question[, threshold])` → `bool` (yes-probability ≥ `threshold`, default `0.5`)
 - `jev.noul(state, question)` → yes-probability (`0.0`–`1.0`). Compare it with a threshold; using it directly as a condition raises an error.
-- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of labels, or a dict of labels to descriptions (2–16 options for local models).
+- `jev.choice(state, question, options)` → the most likely option (`str`). `options` is a list of labels, or a dict of labels to descriptions (2–16 options for general local models).
 - `jev.probabilities(state, question, options)` → `dict` of each option to its probability (sums to `1.0`). Same `options` as `jev.choice`; asking both with the same arguments asks the model once.
-- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`) for ordered level descriptions (2–16 levels for local models)
+- `jev.score(state, question, levels)` → expected level (`float`, `0` to `len(levels) - 1`) for ordered level descriptions (2–16 levels for general local models)
 
 ```python
 # it1: a prompt text
@@ -193,8 +195,9 @@ client.system_one(state=it1, questions={"q0": Noul(instructions="q1"), "q1": Nou
 
 Notes:
 - The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
-- A local question takes one forward pass (about 1–1.5 s with a 4B–9B model on GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
+- A general local model takes one forward pass per question (about 1–1.5 s with a 4B–9B model on GPU). A Clef model takes one forward pass per request, for all of its questions (about 3 s for a 300-token request with Clef-Flash Q8_0 on an Intel Arc integrated GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
 - Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
+- A local prompt is limited to 8,192 tokens: the `state` and one question for a general model, or the `state` and all questions of a request for Clef. Clef is text only.
 - Each run prints `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` to the console: requests sent, distinct states, questions asked, and requests answered. Fewer responses than requests means a request failed. Questions answered from the run's cache are not counted.
 - When `typesafe-sdk` is installed, the `httpx2` (the SDK's HTTP client) and `typesafe_sdk` loggers are set to WARNING, so per-request INFO lines are not shown.
 - `MultiOutputScript` never loads a model or makes network requests; `jev` is not available there.
@@ -617,6 +620,7 @@ Notes:
 
 - Requires v1.3.2 or later, where questions about the same `state` share one request. The script makes 2 requests, so set `max_jev_calls` to 2 or more.
 - `p` is Jev's probability that the output breaks the rule. It is a judgment, not a check: in testing it flagged some rules that were followed and missed some that were broken, and values near `THRESHOLD` changed between runs. Treat the flagged rules as candidates to review.
+- The recipe was developed with Jev through the TypeSafe API. In testing, a local Clef-Flash model flagged most rules, including rules the output followed, so it is not recommended for this recipe.
 - A rule that needs something the script does not have, such as a reference image, cannot be judged. Connect the user request to `in_text_3` for rules that refer to it.
 - `in_text_2` takes the system prompt as plain text, or the text of a JSON config with a `"system_prompt"` key. `\uXXXX` escapes in the JSON are not decoded.
 - Lines starting with `#`, `【`, or `[...]` are headings. Under a heading, each line at the left margin is one rule, and indented lines belong to the rule above. Check `out_text_3` to see how your system prompt was split.
@@ -775,9 +779,6 @@ You should have received a copy of the GNU General Public License along with thi
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### Current Version: 1.3.2
-- `MultiOutputScript (Jev)` batches questions without script changes: questions about the same `state` are sent in one request, and requests for different states are sent in parallel
-- `max_jev_calls` now limits requests instead of questions
-- Added a console summary of Jev requests, states, questions, and responses after each run
-- Hid the per-request INFO log lines of the TypeSafe SDK and its HTTP client
-- `datetime.datetime.now()` and `datetime.date.today()` return the time the run started
+### Current Version: 1.3.3
+- `MultiOutputScript (Jev)` runs local Clef GGUF models (Cloudflare's open-weight decision model) with the model's decision head, answering every question about one `state` in one forward pass
+- Added an application recipe that checks a prompt enhancer's output against its system prompt, with a second script for long system prompts

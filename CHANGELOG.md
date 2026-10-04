@@ -5,6 +5,15 @@ All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 ## [Unreleased]
 
+
+## [1.3.3] - 2026-10-05
+
+- `MultiOutputScript (Jev)` runs local Clef GGUF models, Cloudflare's open-weight decision model
+  - A GGUF whose architecture is `clef` (llama.cpp native format, such as `ggml-org/Clef-Flash-GGUF`) is answered by the model's decision head instead of the lettered-option approximation used for general local models
+  - Every question about one `state` is answered in one forward pass, so batched questions cost one pass per request
+  - Needs the JamePeng fork of llama-cpp-python 0.4.2 or later; other local models keep working with older builds
+  - Text only, with the `state` and all questions of a request limited to 8,192 tokens
+  - Tested with Clef-Flash Q8_0 on Windows (Intel Arc, SYCL build); Linux and macOS are untested
 - Added an application recipe to `README.md` and `README.ja.md` that checks a prompt enhancer's output against its system prompt with `MultiOutputScript (Jev)`
   - The script splits the system prompt into rules, asks Jev whether the output breaks each one in a single request, and reports a score and the rules that are likely broken
   - A second script for long system prompts checks the system prompt in parts of about 1,000 characters, staying under the script step limit
