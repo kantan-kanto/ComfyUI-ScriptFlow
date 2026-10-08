@@ -1,0 +1,182 @@
+{
+ "questions": {
+  "Q1": "Is this statement true?",
+  "Q2": "Is this statement more likely to be true than false?"
+ },
+ "groups": {
+  "U": "Unknowable, symmetric: each statement of a pair should be about 50%",
+  "T": "Future with a tendency: one statement of a pair is more likely, but not certain",
+  "N": "Future, near-certain: the first statement of a pair is almost sure",
+  "K": "Known facts (control): the first statement of a pair is true, the second false",
+  "P": "Known probability: the statement has an exact probability, listed under probabilities"
+ },
+ "pairs": [
+  [
+   "U1",
+   "The next coin I flip will land heads.",
+   "The next coin I flip will land tails."
+  ],
+  [
+   "U2",
+   "The next roll of a fair six-sided die will show an even number.",
+   "The next roll of a fair six-sided die will show an odd number."
+  ],
+  [
+   "U3",
+   "The next card I draw from a well-shuffled standard deck will be red.",
+   "The next card I draw from a well-shuffled standard deck will be black."
+  ],
+  [
+   "U4",
+   "A fair spinner with two equal halves labelled A and B will land on A on its next spin.",
+   "A fair spinner with two equal halves labelled A and B will land on B on its next spin."
+  ],
+  [
+   "U5",
+   "The last digit of the next winning lottery number will be even.",
+   "The last digit of the next winning lottery number will be odd."
+  ],
+  [
+   "U6",
+   "A person chosen at random from the world's population was born in the first half of the year.",
+   "A person chosen at random from the world's population was born in the second half of the year."
+  ],
+  [
+   "U7",
+   "The number of grains of sand on the nearest beach is even.",
+   "The number of grains of sand on the nearest beach is odd."
+  ],
+  [
+   "U8",
+   "The next ball drawn from a bag holding five white and five black balls will be white.",
+   "The next ball drawn from a bag holding five white and five black balls will be black."
+  ],
+  [
+   "T1",
+   "The S&P 500 index will be higher one year from now than it is today.",
+   "The S&P 500 index will be lower one year from now than it is today."
+  ],
+  [
+   "T2",
+   "The price of Bitcoin will be higher one year from now than it is today.",
+   "The price of Bitcoin will be lower one year from now than it is today."
+  ],
+  [
+   "T3",
+   "It will not rain in Tokyo on this day next year.",
+   "It will rain in Tokyo on this day next year."
+  ],
+  [
+   "T4",
+   "The next FIFA World Cup will be won by a European team.",
+   "The next FIFA World Cup will be won by a team from outside Europe."
+  ],
+  [
+   "T5",
+   "The men's 100 metres world record will not be broken within the next year.",
+   "The men's 100 metres world record will be broken within the next year."
+  ],
+  [
+   "T6",
+   "The next person elected president of the United States will be older than 50 when taking office.",
+   "The next person elected president of the United States will be younger than 50 when taking office."
+  ],
+  [
+   "N1",
+   "The sun will rise tomorrow.",
+   "The sun will not rise tomorrow."
+  ],
+  [
+   "N2",
+   "The world's population will be larger one year from now than it is today.",
+   "The world's population will be smaller one year from now than it is today."
+  ],
+  [
+   "N3",
+   "An earthquake of magnitude 6 or greater will occur somewhere in the world during the next year.",
+   "No earthquake of magnitude 6 or greater will occur anywhere in the world during the next year."
+  ],
+  [
+   "N4",
+   "It will snow in Sapporo at some point next January.",
+   "It will not snow in Sapporo at any point next January."
+  ],
+  [
+   "N5",
+   "Next year will have 365 or 366 days.",
+   "Next year will have 400 days."
+  ],
+  [
+   "N6",
+   "The next total solar eclipse visible from Earth will occur within the next five years.",
+   "No total solar eclipse will be visible from Earth during the next five years."
+  ],
+  [
+   "K1",
+   "Paris is the capital of France.",
+   "Paris is the capital of Germany."
+  ],
+  [
+   "K2",
+   "Water boils at 100 degrees Celsius at sea level.",
+   "Water boils at 50 degrees Celsius at sea level."
+  ],
+  [
+   "K3",
+   "In April 1986, a reactor at the Chernobyl nuclear power plant exploded, and people were killed.",
+   "No one was killed in the accident at the Chernobyl nuclear power plant in April 1986."
+  ],
+  [
+   "K4",
+   "The potato blight of the 1840s led to a famine in Ireland in which about one million people died.",
+   "No famine occurred in Ireland during the 1840s."
+  ],
+  [
+   "K5",
+   "A 1964 report by the US Surgeon General found that smoking causes lung cancer.",
+   "The 1964 report by the US Surgeon General on smoking found no evidence that smoking harms health."
+  ],
+  [
+   "K6",
+   "The Earth orbits the Sun.",
+   "The Sun orbits the Earth."
+  ],
+  [
+   "P1",
+   "The next roll of a fair six-sided die will show a 1.",
+   "The next roll of a fair six-sided die will show a number other than 1."
+  ],
+  [
+   "P2",
+   "The next card I draw from a well-shuffled standard deck will be a heart.",
+   "The next card I draw from a well-shuffled standard deck will not be a heart."
+  ],
+  [
+   "P3",
+   "The next card I draw from a well-shuffled standard deck will be an ace.",
+   "The next card I draw from a well-shuffled standard deck will not be an ace."
+  ],
+  [
+   "P4",
+   "The next roll of a fair six-sided die will show a 1 or a 2.",
+   "The next roll of a fair six-sided die will show a 3, 4, 5, or 6."
+  ],
+  [
+   "P5",
+   "The next two flips of a fair coin will both land heads.",
+   "The next two flips of a fair coin will not both land heads."
+  ]
+ ],
+ "probabilities": {
+  "P1a": 0.1667,
+  "P1b": 0.8333,
+  "P2a": 0.25,
+  "P2b": 0.75,
+  "P3a": 0.0769,
+  "P3b": 0.9231,
+  "P4a": 0.3333,
+  "P4b": 0.6667,
+  "P5a": 0.25,
+  "P5b": 0.75
+ }
+}
