@@ -5,6 +5,10 @@ All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 ## [Unreleased]
 
+- Added a technical report, `docs/local-model-uncertainty/` (English and Japanese), on how Jev, Clef-Flash, and a general local model (Qwen3.5-9B) answer questions whose answer cannot be known
+  - With a general local model, a low `jev.noul` value can mean "cannot say it is true" rather than "unlikely"
+  - Asking about both a statement and its negation, or picking a percentage level with `jev.score`, separates the two; the report has the measurements, example scripts, and the statements and results as JSON
+  - `README.md` and `README.ja.md` link to the report from the notes of `MultiOutputScript (Jev)`
 
 ## [1.3.3] - 2026-10-05
 
