@@ -3,7 +3,7 @@
 
 ---
 
-**Version:** 1.3.3
+**Version:** 1.3.4
 **License:** GPL-3.0
 
 System One の判断モデルを使える、安全な Python 風スクリプトノードです。
@@ -56,6 +56,7 @@ System One モデルはテキストを生成せず、1 回の高速な処理で�
 - ComfyUI を実行している Python 環境に [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) をインストールします。JamePeng 版と、本家の [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35 で動作を確認しています。
 - 指示追従型（instruction-tuned）の GGUF モデルを `ComfyUI/models/LLM`（または `models/text_encoders`）に置きます。GGUF にはチャットテンプレート（`tokenizer.chat_template` メタデータ）が含まれている必要があります。ほとんどの指示追従型 GGUF には含まれています。Qwen3.5-9B Q8_0 と Gemma-4-E4B Q8 で動作を確認しています。
 - Cloudflare のオープンウェイトの判断モデル [Clef](https://huggingface.co/Cloudflare/clef-flash) を使う場合は、llama.cpp ネイティブ形式の Clef の GGUF（[ggml-org/Clef-Flash-GGUF](https://huggingface.co/ggml-org/Clef-Flash-GGUF) など）を同じフォルダに置きます。JamePeng 版の llama-cpp-python 0.4.2 以降が必要です。通常のチャットモデルとして変換された Clef の GGUF は汎用モデルとして扱われ、Clef の判断ヘッドは使われません。Windows（Intel Arc、SYCL ビルド）の Clef-Flash Q8_0 で動作を確認しています。Linux と macOS では未確認です。
+- Liquid AI のオープンウェイトの判断モデル [d1](https://huggingface.co/LiquidAI/d1-3B) を使う場合は、d1 の GGUF（[LiquidAI/d1-3B-GGUF](https://huggingface.co/LiquidAI/d1-3B-GGUF) など）を同じフォルダに置きます。LFM2 モデルを読み込める llama-cpp-python が必要です。`mmproj` ファイルは不要です。Windows（Intel Arc、SYCL ビルド）の d1-3B Q8_0 と JamePeng 版の llama-cpp-python 0.4.2 で動作を確認しています。Linux と macOS では未確認です。
 
 ## 主な機能
 - 複数の入力：数値とテキストの入力を自由に組み合わせられます。
@@ -126,6 +127,7 @@ ov1, ov2 = (512, 384) if w >= h else (384, 512)
 - **TypeSafe API**（基本）：質問をインターネット経由で Jev に送ります。
 - **ローカル GGUF モデル**（フォールバック）：Jev API を使えない場合や、テキストを手元のマシンから出したくない場合に使います。汎用の指示追従型モデルで Jev 風の判断を近似するもので、[SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev) の方式に従い、文字を割り当てた選択肢の次トークン確率を 1 回の順伝播で読み取ります。テキストは生成せず、ネットワークにも何も送りません。答えや確率は Jev とは異なります。
 - **ローカルの Clef モデル**：[Clef](https://huggingface.co/Cloudflare/clef-flash) は、Jev と同じ種類の質問に答えるオープンウェイトの判断モデルです。GGUF のメタデータ `general.architecture` が `clef` のモデルを、Clef として扱います。Clef の GGUF を選ぶと、上の近似の代わりにモデルの判断ヘッドを使い、同じ `state` についての質問すべてに 1 回の順伝播で答えます。`state` と質問を Clef の入力書式に並べ、判断ヘッドが出す選択肢ごとのスコアを、質問ごとに softmax で確率にします。文章は生成せず、ネットワークにも何も送信しません。答えと確率は Jev とは異なります。
+- **ローカルの d1 モデル**：[d1](https://huggingface.co/LiquidAI/d1-3B) は、Jev と同じ種類の質問に答えるオープンウェイトの判断モデルです。GGUF のメタデータ `lfm2.decision.type` が `lfm2-d1` のモデルを、d1 として扱います。d1 の GGUF を選ぶと、上の文字を割り当てた選択肢の代わりに、d1 が学習したプロンプト形式で質問します。答えは、d1 が学習した返答の次トークン確率から読み取ります。`jev.noul` では yes か no、`jev.choice` では選択肢のコード、`jev.score` では数字です。文章は生成せず、ネットワークにも何も送信しません。答えと確率は Jev とは異なります。
 
 スクリプトはどれでも同じです。各バックエンドのセットアップは[インストール](#インストール)を参照してください。
 
@@ -197,10 +199,12 @@ client.system_one(state=it1, questions={"q0": Noul(instructions="q1"), "q1": Nou
 
 注意：
 - TypeSafe API は `state` と質問をインターネット経由で送信します。外部に出せないテキストには使わないでください。
-- 汎用のローカルモデルは、質問 1 つにつき 1 回の順伝播で処理します（GPU 上の 4B〜9B モデルで約 1〜1.5 秒）。Clef モデルは、1 回のリクエストに含まれる質問すべてを 1 回の順伝播で処理します（Intel Arc の内蔵 GPU 上の Clef-Flash Q8_0 で、300 トークンのリクエストが約 3 秒）。モデルは実行ごとに最初の質問で読み込まれ（数秒）、実行が終わるとアンロードされて、ワークフローの残りのために VRAM を解放します。
+- 汎用のローカルモデルは、質問 1 つにつき 1 回の順伝播で処理します（GPU 上の 4B〜9B モデルで約 1〜1.5 秒）。Clef モデルは、1 回のリクエストに含まれる質問すべてを 1 回の順伝播で処理します（Intel Arc の内蔵 GPU 上の Clef-Flash Q8_0 で、300 トークンのリクエストが約 3 秒）。d1 モデルは、質問 1 つにつき 1 回の順伝播で処理します（同じ GPU 上の d1-3B Q8_0 で約 0.5 秒）。モデルは実行ごとに最初の質問で読み込まれ（数秒）、実行が終わるとアンロードされて、ワークフローの残りのために VRAM を解放します。
 - ローカルモデルの確率は較正されておらず、モデルによって変わります。しきい値は実際の入力で試して決めてください。
 - Qwen3.5-9B での試験では、汎用のローカルモデルは、テキストから答えが決まらない質問に「No」と答えました。`jev.noul` の低い値は、「起こりにくい」ではなく「真だとは言えない」を表すことがあります。この2つを区別したい場合は、主張とその否定形の両方について聞くか、`jev.score` でパーセントの段階を選ばせてください。測定の結果とスクリプトの例は、[汎用のローカルモデルは、不確かな問いにどう答えるか](docs/local-model-uncertainty/README.ja.md) にあります。
 - ローカルモデルのプロンプトは 8,192 トークンまでです。汎用モデルでは `state` と質問 1 つ、Clef では `state` と 1 回のリクエストの質問すべてがこの範囲に収まる必要があります。Clef はテキストのみに対応しています。
+- d1 モデルでは、`jev.choice` と `jev.probabilities` の選択肢は 2〜26 個、`jev.score` の段階は 2〜10 個です。画像には対応していません。
+- d1-3B での試験では、似た選択肢に確率が分かれ、1 つだけ性質の違う選択肢が最多になることがありました。アスペクト比の例では、縦長の 3 つの比率の合計が 0.49 だったのに対し、0.35 の `1:1` が選ばれました。選択肢がグループに分かれる場合は、`jev.probabilities` をグループごとに合計してから選んでください。
 - 実行ごとにコンソールへ `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` を出力します。送ったリクエスト数、異なる `state` の数、質問数、返信があったリクエスト数です。返信数がリクエスト数より少なければ、途中のリクエストが失敗しています。同じ実行のキャッシュから答えた質問は数えません。
 - `typesafe-sdk` がインストールされていると、`httpx2`（SDK が使う HTTP クライアント）と `typesafe_sdk` のロガーを WARNING に設定するため、リクエストごとの INFO ログは表示されません。
 - `MultiOutputScript` はモデルを読み込まず、ネットワークにもアクセスしません。`jev` は使えません。
@@ -756,6 +760,6 @@ You should have received a copy of the GNU General Public License along with thi
 
 詳しいバージョン履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
-### 現在のバージョン：1.3.3
-- `MultiOutputScript (Jev)` が、ローカルの Clef の GGUF モデル（Cloudflare のオープンウェイトの判断モデル）をモデルの判断ヘッドで動かせるように。同じ `state` についての質問すべてに 1 回の順伝播で答える
-- プロンプトエンハンサーの出力をシステムプロンプトと照らし合わせる応用レシピを追加。長いシステムプロンプト用の 2 つめのスクリプトも含む
+### 現在のバージョン：1.3.4
+- `MultiOutputScript (Jev)` が、ローカルの d1 の GGUF モデル（Liquid AI のオープンウェイトの判断モデル）を動かせるように。d1 が学習したプロンプト形式で質問する
+- Jev、Clef-Flash、汎用のローカルモデルが、答えを知りようのない問いにどう答えるかを調べた技術レポートを追加

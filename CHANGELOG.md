@@ -3,8 +3,13 @@
 All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 
-## [Unreleased]
+## [1.3.4] - 2026-10-09
 
+- `MultiOutputScript (Jev)` runs local d1 GGUF models, Liquid AI's open-weight decision model
+  - A GGUF whose `lfm2.decision.type` metadata is `lfm2-d1` (such as `LiquidAI/d1-3B-GGUF`) is asked in the prompt format d1 was tuned on, and the answer is read from the next-token probabilities of its yes/no, option code, or digit reply, instead of the lettered-option approximation used for general local models
+  - One forward pass per question; `jev.choice` and `jev.probabilities` take 2 to 26 options and `jev.score` takes 2 to 10 levels
+  - Text only, with the `state` and one question limited to 8,192 tokens
+  - Tested with d1-3B Q8_0 and the JamePeng fork of llama-cpp-python 0.4.2 on Windows (Intel Arc, SYCL build); Linux and macOS are untested
 - Added a technical report, `docs/local-model-uncertainty/` (English and Japanese), on how Jev, Clef-Flash, and a general local model (Qwen3.5-9B) answer questions whose answer cannot be known
   - With a general local model, a low `jev.noul` value can mean "cannot say it is true" rather than "unlikely"
   - Asking about both a statement and its negation, or picking a percentage level with `jev.score`, separates the two; the report has the measurements, example scripts, and the statements and results as JSON

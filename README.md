@@ -1,7 +1,7 @@
 # ComfyUI-ScriptFlow
 [en | [ja](README.ja.md)]
 
-**Version:** 1.3.3
+**Version:** 1.3.4
 **License:** GPL-3.0
 
 Safe Python-like script node for ComfyUI with a System One decision model.
@@ -54,6 +54,7 @@ The `MultiOutputScript` and `centi` nodes need no extra packages. `MultiOutputSc
 - Install [llama-cpp-python](https://github.com/JamePeng/llama-cpp-python) in the Python environment that runs ComfyUI. Tested with the JamePeng fork and the upstream [abetlen/llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 0.3.35.
 - Put an instruction-tuned GGUF model in `ComfyUI/models/LLM` (or `models/text_encoders`). The GGUF must include a chat template (`tokenizer.chat_template` metadata), as most instruction-tuned GGUFs do. Tested with Qwen3.5-9B Q8_0 and Gemma-4-E4B Q8.
 - To use [Clef](https://huggingface.co/Cloudflare/clef-flash), Cloudflare's open-weight decision model, put a Clef GGUF in the llama.cpp native format, such as [ggml-org/Clef-Flash-GGUF](https://huggingface.co/ggml-org/Clef-Flash-GGUF), in the same folder. It needs the JamePeng fork of llama-cpp-python 0.4.2 or later. A Clef GGUF converted as an ordinary chat model is treated as a general model and does not use Clef's decision head. Tested with Clef-Flash Q8_0 on Windows (Intel Arc, SYCL build); Linux and macOS are untested.
+- To use [d1](https://huggingface.co/LiquidAI/d1-3B), Liquid AI's open-weight decision model, put a d1 GGUF, such as [LiquidAI/d1-3B-GGUF](https://huggingface.co/LiquidAI/d1-3B-GGUF), in the same folder. It needs a llama-cpp-python build that loads LFM2 models. The `mmproj` file is not needed. Tested with d1-3B Q8_0 and the JamePeng fork of llama-cpp-python 0.4.2 on Windows (Intel Arc, SYCL build); Linux and macOS are untested.
 
 ## Key Features
 - Multiple inputs: freely combine numeric and text inputs.
@@ -124,6 +125,7 @@ Same inputs, outputs, and script rules as `MultiOutputScript`, plus a `jev` name
 - **TypeSafe API** (primary): sends the questions to Jev over the internet.
 - **Local GGUF model** (fallback): for when the Jev API is not available, or when text must stay on your machine. It approximates Jev-style decisions with a general instruction-tuned model, reading the answer from next-token probabilities of lettered options in one forward pass, following [SemIf (OpenJev)](https://github.com/TheoLeeCJ/SemIf-OpenJev). No text is generated and nothing is sent over the network. Answers and probabilities differ from Jev's.
 - **Local Clef model**: [Clef](https://huggingface.co/Cloudflare/clef-flash) is an open-weight decision model with the same question types as Jev. A GGUF whose `general.architecture` metadata is `clef` is treated as a Clef model. Selecting one uses the model's decision head instead of the approximation above, and answers every question about one `state` in one forward pass: the `state` and the questions are laid out in Clef's input format, and the score the decision head gives each option is turned into probabilities with a softmax per question. No text is generated and nothing is sent over the network. Answers and probabilities differ from Jev's.
+- **Local d1 model**: [d1](https://huggingface.co/LiquidAI/d1-3B) is an open-weight decision model with the same question types as Jev. A GGUF whose `lfm2.decision.type` metadata is `lfm2-d1` is treated as a d1 model. Selecting one asks each question in the prompt format d1 was tuned on instead of the lettered options above, and reads the answer from the next-token probabilities of the reply d1 was tuned to give: yes or no for `jev.noul`, an option code for `jev.choice`, and a digit for `jev.score`. No text is generated and nothing is sent over the network. Answers and probabilities differ from Jev's.
 
 Scripts are the same for all of them. See [Installation](#installation) for the setup of each backend.
 
@@ -195,10 +197,12 @@ client.system_one(state=it1, questions={"q0": Noul(instructions="q1"), "q1": Nou
 
 Notes:
 - The TypeSafe API sends `state` and questions over the internet. Do not use it with text you cannot share externally.
-- A general local model takes one forward pass per question (about 1–1.5 s with a 4B–9B model on GPU). A Clef model takes one forward pass per request, for all of its questions (about 3 s for a 300-token request with Clef-Flash Q8_0 on an Intel Arc integrated GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
+- A general local model takes one forward pass per question (about 1–1.5 s with a 4B–9B model on GPU). A Clef model takes one forward pass per request, for all of its questions (about 3 s for a 300-token request with Clef-Flash Q8_0 on an Intel Arc integrated GPU). A d1 model takes one forward pass per question (about 0.5 s with d1-3B Q8_0 on the same GPU). The model is loaded on the first question of each run (several seconds) and unloaded when the run ends to free VRAM for the rest of the workflow.
 - Local probabilities are uncalibrated and depend on the model; test thresholds on your own inputs.
 - In tests with Qwen3.5-9B, a general local model answered "no" when the text did not settle the question, so a low `jev.noul` value can mean "cannot say it is true" rather than "unlikely". To tell the two apart, ask about both the statement and its negation, or have the model pick a percentage level with `jev.score`. See [How general local models answer uncertain questions](docs/local-model-uncertainty/README.md) for the measurements and example scripts.
 - A local prompt is limited to 8,192 tokens: the `state` and one question for a general model, or the `state` and all questions of a request for Clef. Clef is text only.
+- With a d1 model, `jev.choice` and `jev.probabilities` take 2 to 26 options and `jev.score` takes 2 to 10 levels. Images are not supported.
+- In tests with d1-3B, the probabilities of similar options were spread out, so a single different option could come first: in the aspect ratio example, three portrait ratios shared 0.49 and `1:1` was chosen with 0.35. When options fall into groups, add up `jev.probabilities` by group before picking one.
 - Each run prints `[ComfyUI-ScriptFlow] Jev requests: N, states: S, questions: Q, responses: M` to the console: requests sent, distinct states, questions asked, and requests answered. Fewer responses than requests means a request failed. Questions answered from the run's cache are not counted.
 - When `typesafe-sdk` is installed, the `httpx2` (the SDK's HTTP client) and `typesafe_sdk` loggers are set to WARNING, so per-request INFO lines are not shown.
 - `MultiOutputScript` never loads a model or makes network requests; `jev` is not available there.
@@ -780,6 +784,6 @@ You should have received a copy of the GNU General Public License along with thi
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### Current Version: 1.3.3
-- `MultiOutputScript (Jev)` runs local Clef GGUF models (Cloudflare's open-weight decision model) with the model's decision head, answering every question about one `state` in one forward pass
-- Added an application recipe that checks a prompt enhancer's output against its system prompt, with a second script for long system prompts
+### Current Version: 1.3.4
+- `MultiOutputScript (Jev)` runs local d1 GGUF models (Liquid AI's open-weight decision model), asking each question in the prompt format d1 was tuned on
+- Added a technical report on how Jev, Clef-Flash, and a general local model answer questions whose answer cannot be known
