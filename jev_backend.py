@@ -79,6 +79,11 @@ _CLEF_SET_ORDER_SYMBOLS = (
 _LLAMA_PROCESS_TYPE_DECODE = 1
 _GGUF_TYPE_STRING = 8
 
+# d1 (Liquid AI's decision model) prompt and answer words, as in prompt.py of LiquidAI/d1-3B
+# and the "systemone" template of its GGUF.
+_D1_CODES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_D1_NOUL_FORMS = [("yes", "Yes", "YES"), ("no", "No", "NO")]
+
 _loaded_model: tuple[str, Any, Any] | None = None
 
 
@@ -184,12 +189,18 @@ class JevBackend:
 
 
 class LocalJev:
-    """Answers with a local GGUF model, one forward pass per question. Noul is asked as Yes/No options."""
+    """Answers with a local GGUF model, one forward pass per question.
+
+    A d1 model is asked in the prompt format it was tuned on. Other models get lettered options, noul as Yes/No.
+    """
 
     def __init__(self, model_path: str):
         self.model_path = model_path
 
     def ask(self, state: Any, questions: list[tuple]) -> list[list[float]]:
+        llm, _ = load_local_model(self.model_path)
+        if llm.metadata.get("lfm2.decision.type") == "lfm2-d1":
+            return [_d1_probabilities(llm, state, *question) for question in questions]
         answers = []
         for kind, question, criteria in questions:
             if kind == "noul":
@@ -351,15 +362,67 @@ def _option_probabilities(model_path: str, state: Any, question: Any, options: l
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
     prompt = formatter(messages=messages, enable_thinking=False).prompt
-    tokens = llm.tokenize(prompt.encode("utf-8"), add_bos=False, special=True)
-    if len(tokens) >= llm.n_ctx():
-        raise ValueError(f"Jev prompt is {len(tokens)} tokens, over the {llm.n_ctx()} token context")
     slots = []
     for letter in _LETTERS[: len(options)]:
         encoded = llm.tokenize(letter.encode("utf-8"), add_bos=False, special=False)
         if len(encoded) != 1:
             raise ValueError(f"Model tokenizer does not encode {letter!r} as one token")
         slots.append(encoded[0])
+    logits = _next_token_logits(llm, prompt)[slots].astype(np.float64)
+    weights = np.exp(logits - logits.max())
+    return (weights / weights.sum()).tolist()
+
+
+def _d1_text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def _d1_probabilities(llm: Any, state: Any, kind: str, question: Any, criteria: Any) -> list[float]:
+    """Reads one decision from the next-token logits of the answer words d1 was tuned to reply with."""
+
+    def token_ids(forms: Any) -> list[int]:
+        encoded = [llm.tokenize(form.encode("utf-8"), add_bos=False, special=False) for form in forms]
+        return [tokens[0] for tokens in encoded if len(tokens) == 1]
+
+    if kind == "noul":
+        body = "\n\nReply with yes or no only."
+        groups = [token_ids(forms) for forms in _D1_NOUL_FORMS]
+    elif kind == "choice":
+        if not 2 <= len(criteria) <= len(_D1_CODES):
+            raise ValueError(f"d1 choice questions need 2-{len(_D1_CODES)} options, got {len(criteria)}")
+        labels = [str(label).strip() for label in criteria]
+        # Labels that are single letters are their own codes.
+        codes = labels if all(len(label) == 1 and label.isalpha() for label in labels) else _D1_CODES[: len(labels)]
+        lines = [
+            f"{code} {_d1_text(description) if description else label.replace('_', ' ')}"
+            for code, label, description in zip(codes, labels, criteria.values())
+        ]
+        body = "\n\nOptions:\n" + "\n".join(lines) + "\n\nReply with the option code only."
+        groups = [token_ids((code, f" {code}")) for code in codes]
+    else:
+        if not 2 <= len(criteria) <= 10:
+            raise ValueError(f"d1 score questions need 2-10 levels, got {len(criteria)}")
+        legend = "".join(f"{level} {_d1_text(description)}\n" for level, description in enumerate(criteria))
+        body = f"\n\n{legend}\nReply with a single digit 0-{len(criteria) - 1} only."
+        groups = [token_ids([str(level)]) for level in range(len(criteria))]
+    if not all(groups) or len({group[0] for group in groups}) != len(groups):
+        raise ValueError("Model tokenizer does not encode each d1 answer as one distinct token")
+    state_text = state if isinstance(state, str) else json.dumps(state, ensure_ascii=False, indent=2)
+    prompt = (
+        f"<|startoftext|><|im_start|>user\n{state_text}\n\n\nQUESTION:\n"
+        f"{_d1_text(question)}{body}<|im_end|>\n<|im_start|>assistant\n"
+    )
+    vocabulary = _next_token_logits(llm, prompt)
+    # Each option scores its best form.
+    scores = np.array([vocabulary[group].max() for group in groups], dtype=np.float64)
+    weights = np.exp(scores - scores.max())
+    return (weights / weights.sum()).tolist()
+
+
+def _next_token_logits(llm: Any, prompt: str) -> Any:
+    tokens = llm.tokenize(prompt.encode("utf-8"), add_bos=False, special=True)
+    if len(tokens) >= llm.n_ctx():
+        raise ValueError(f"Jev prompt is {len(tokens)} tokens, over the {llm.n_ctx()} token context")
     # Each question starts from empty memory, including the recurrent state of hybrid models such as Qwen3.5.
     # Decode with the llama.cpp API directly instead of the Llama evaluation helper,
     # whose method name trips the ComfyUI Registry dynamic-execution scanner.
@@ -377,10 +440,7 @@ def _option_probabilities(model_path: str, state: Any, question: Any, options: l
             raise RuntimeError("llama_decode failed for the Jev prompt")
     finally:
         llama_batch_free(batch)
-    vocabulary = np.ctypeslib.as_array(llama_get_logits_ith(llm.ctx, -1), shape=(llm.n_vocab(),))
-    logits = vocabulary[slots].astype(np.float64)
-    weights = np.exp(logits - logits.max())
-    return (weights / weights.sum()).tolist()
+    return np.ctypeslib.as_array(llama_get_logits_ith(llm.ctx, -1), shape=(llm.n_vocab(),))
 
 
 def _model_dirs() -> list[str]:
