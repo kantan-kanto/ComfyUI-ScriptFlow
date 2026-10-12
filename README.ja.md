@@ -3,7 +3,7 @@
 
 ---
 
-**Version:** 1.3.4
+**Version:** 1.3.5
 **License:** GPL-3.0
 
 System One の判断モデルを使える、安全な Python 風スクリプトノードです。
@@ -760,6 +760,6 @@ You should have received a copy of the GNU General Public License along with thi
 
 詳しいバージョン履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
-### 現在のバージョン：1.3.4
+### 現在のバージョン：1.3.5
 - `MultiOutputScript (Jev)` が、ローカルの d1 の GGUF モデル（Liquid AI のオープンウェイトの判断モデル）を動かせるように。d1 が学習したプロンプト形式で質問する
 - Jev、Clef-Flash、汎用のローカルモデルが、答えを知りようのない問いにどう答えるかを調べた技術レポートを追加

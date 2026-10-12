@@ -1,7 +1,7 @@
 # ComfyUI-ScriptFlow
 [en | [ja](README.ja.md)]
 
-**Version:** 1.3.4
+**Version:** 1.3.5
 **License:** GPL-3.0
 
 Safe Python-like script node for ComfyUI with a System One decision model.
@@ -784,6 +784,6 @@ You should have received a copy of the GNU General Public License along with thi
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### Current Version: 1.3.4
+### Current Version: 1.3.5
 - `MultiOutputScript (Jev)` runs local d1 GGUF models (Liquid AI's open-weight decision model), asking each question in the prompt format d1 was tuned on
 - Added a technical report on how Jev, Clef-Flash, and a general local model answer questions whose answer cannot be known

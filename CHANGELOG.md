@@ -3,6 +3,13 @@
 All notable changes to ComfyUI-ScriptFlow will be documented in this file.
 
 
+## [1.3.5] - 2026-10-12
+
+- The ComfyUI Registry archive no longer includes `docs/` and `images/` (added `.comfyignore`), which reduces it from about 3 MB to about 50 KB
+  - No change to the nodes; 1.3.4 was uploaded to the Registry but stayed pending review, and this release republishes it
+  - Both folders stay in the GitHub repository; in a Registry install, the README's demo image and the link to the technical report point to files that are not installed
+
+
 ## [1.3.4] - 2026-10-09
 
 - `MultiOutputScript (Jev)` runs local d1 GGUF models, Liquid AI's open-weight decision model
